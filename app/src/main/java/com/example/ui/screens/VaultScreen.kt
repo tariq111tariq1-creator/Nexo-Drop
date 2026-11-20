@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Fingerprint
@@ -81,7 +82,8 @@ fun VaultScreen(
     onOpenItem: (VaultItemEntity) -> Unit,
     onRestoreItem: (VaultItemEntity) -> Unit,
     onDeleteItem: (VaultItemEntity) -> Unit,
-    onUnhideApp: (String) -> Unit
+    onUnhideApp: (String) -> Unit,
+    onOpenBackupCenter: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as? FragmentActivity
@@ -273,11 +275,19 @@ fun VaultScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(stringResource(R.string.vault_import_file))
                             }
+                            IconButton(
+                                onClick = onOpenBackupCenter,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("vault_backup_button")
+                            ) {
+                                Icon(Icons.Rounded.Backup, contentDescription = stringResource(R.string.nav_backup))
+                            }
                             OutlinedButton(
                                 onClick = onLockVault,
                                 modifier = Modifier.height(48.dp)
                             ) {
-                                Icon(Icons.Rounded.Lock, contentDescription = null)
+                                Icon(Icons.Rounded.Lock, contentDescription = stringResource(R.string.vault_lock_now))
                             }
                         }
                     }

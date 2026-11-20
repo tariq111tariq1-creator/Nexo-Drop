@@ -56,6 +56,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.data.AppPreferences
 import com.example.p2p.ConnectionPhase
+import com.example.ui.screens.BackupScreen
 import com.example.ui.screens.ExplorerScreen
 import com.example.ui.screens.GroupHubScreen
 import com.example.ui.screens.OnboardingScreen
@@ -70,6 +71,7 @@ const val ROUTE_EXPLORER = "explorer"
 const val ROUTE_VAULT = "vault"
 const val ROUTE_REPORTS = "reports"
 const val ROUTE_SETTINGS = "settings"
+const val ROUTE_BACKUP = "backup"
 
 private data class NavDest(
     val route: String,
@@ -105,6 +107,7 @@ class MainActivity : FragmentActivity() {
             val currentFolderFiles by viewModel.currentFolderFiles.collectAsStateWithLifecycle()
             val vaultUnlocked by viewModel.vaultUnlocked.collectAsStateWithLifecycle()
             val permissions by viewModel.permissionSnapshot.collectAsStateWithLifecycle()
+            val backupState by viewModel.backupState.collectAsStateWithLifecycle()
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -152,7 +155,8 @@ class MainActivity : FragmentActivity() {
                             currentFolderPath = currentFolderPath,
                             currentFolderFiles = currentFolderFiles,
                             vaultUnlocked = vaultUnlocked,
-                            permissions = permissions
+                            permissions = permissions,
+                            backupState = backupState
                         )
                     }
                 }
@@ -181,7 +185,8 @@ private fun MainAdaptiveScaffold(
     currentFolderPath: String,
     currentFolderFiles: List<com.example.data.DeviceFileItem>,
     vaultUnlocked: Boolean,
-    permissions: com.example.util.PermissionSnapshot
+    permissions: com.example.util.PermissionSnapshot,
+    backupState: BackupUiState
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -208,6 +213,11 @@ private fun MainAdaptiveScaffold(
     }
 
     val isGroupActive = groupState.phase == ConnectionPhase.HOSTING || groupState.phase == ConnectionPhase.CONNECTED
+    val openBackupCenter: () -> Unit = {
+        navController.navigate(ROUTE_BACKUP) {
+            launchSingleTop = true
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 600.dp
@@ -290,6 +300,9 @@ private fun MainAdaptiveScaffold(
                                 onToggleLocalNetwork = { enabled ->
                                     viewModel.toggleLocalNetworkMode(enabled)
                                 },
+                                onToggleAutoReceive = { enabled ->
+                                    viewModel.setAutoReceiveFiles(enabled)
+                                },
                                 onParseQr = { raw -> viewModel.parseScannedQr(raw) },
                                 onJoinViaDirectCredentials = { ssid, pass, ip, port, name, pin ->
                                     viewModel.joinViaDirectCredentials(ssid, pass, ip, port, name, pin)
@@ -311,6 +324,7 @@ private fun MainAdaptiveScaffold(
                                     viewModel.kickOrBanPeer(devId, ban)
                                 },
                                 onNavigateToExplorer = { navigateTab(ROUTE_EXPLORER) },
+                                onOpenBackupCenter = openBackupCenter,
                                 onAddPickedUris = { uris ->
                                     viewModel.shareSelectedToGroup(emptyList(), emptyList(), uris)
                                 },
@@ -319,6 +333,21 @@ private fun MainAdaptiveScaffold(
                                 },
                                 onCancelTransfer = { id -> viewModel.cancelTransfer(id) },
                                 onSendChat = { text -> viewModel.sendChat(text) },
+                                onOpenReceivedFile = { rf -> viewModel.openReceivedFile(rf) },
+                                onMoveReceivedToVault = { rf -> viewModel.moveReceivedFileToVault(rf) },
+                                onCopyOrMoveReceivedFile = { rf, uri, del ->
+                                    viewModel.copyOrMoveReceivedFile(rf, uri, del)
+                                },
+                                onRenameReceivedFile = { rf, newName ->
+                                    viewModel.renameReceivedFile(rf, newName)
+                                },
+                                onShareReceivedExternal = { rf ->
+                                    viewModel.shareReceivedFileExternally(rf)
+                                },
+                                onReshareReceivedToGroup = { rf ->
+                                    viewModel.reshareReceivedFileToGroup(rf)
+                                },
+                                onDeleteReceivedFile = { rf -> viewModel.deleteReceivedFile(rf) },
                                 onClearError = { viewModel.p2pManager.clearError() }
                             )
                         }
@@ -346,7 +375,8 @@ private fun MainAdaptiveScaffold(
                                 onHideFilesInVault = { files, uris ->
                                     viewModel.hideFilesInVault(files, uris)
                                 },
-                                onHideApps = { apps -> viewModel.hideInstalledApps(apps) }
+                                onHideApps = { apps -> viewModel.hideInstalledApps(apps) },
+                                onOpenBackupCenter = openBackupCenter
                             )
                         }
 
@@ -365,7 +395,8 @@ private fun MainAdaptiveScaffold(
                                 onOpenItem = { item -> viewModel.openVaultItem(item) },
                                 onRestoreItem = { item -> viewModel.exportVaultItemToStorage(item) },
                                 onDeleteItem = { item -> viewModel.deleteVaultItem(item) },
-                                onUnhideApp = { pkg -> viewModel.unhideApp(pkg) }
+                                onUnhideApp = { pkg -> viewModel.unhideApp(pkg) },
+                                onOpenBackupCenter = openBackupCenter
                             )
                         }
 
@@ -393,7 +424,41 @@ private fun MainAdaptiveScaffold(
                                 onSetBiometric = { viewModel.setBiometricEnabled(it) },
                                 onSetSilentNotif = { viewModel.setSilentNotifications(it) },
                                 onSetCompleteOnlyNotif = { viewModel.setNotifyCompleteOnly(it) },
-                                onRefreshPermissions = { viewModel.refreshPermissions() }
+                                onRefreshPermissions = { viewModel.refreshPermissions() },
+                                onOpenBackupCenter = openBackupCenter
+                            )
+                        }
+
+                        composable(ROUTE_BACKUP) {
+                            BackupScreen(
+                                backupState = backupState,
+                                installedApps = installedApps,
+                                deviceFiles = deviceFiles,
+                                storageRoots = storageRoots,
+                                currentFolderPath = currentFolderPath,
+                                isGroupActive = isGroupActive,
+                                isWideScreen = useRail,
+                                onNavigateBack = { navController.popBackStack() },
+                                onRefreshApps = { includeSys -> viewModel.refreshStorageAndApps(includeSys) },
+                                onOpenDirectory = { path -> viewModel.openDirectory(path) },
+                                onBackupApps = { apps, zip, treeUri ->
+                                    viewModel.backupApps(apps, zip, treeUri)
+                                },
+                                onBackupFiles = { folder, files, zip, inc, treeUri ->
+                                    viewModel.backupFiles(folder, files, zip, inc, treeUri)
+                                },
+                                onExportEncrypted = { pass, treeUri ->
+                                    viewModel.exportEncryptedBackup(pass, treeUri)
+                                },
+                                onRestoreEncrypted = { uri, pass ->
+                                    viewModel.restoreEncryptedBackup(uri, pass)
+                                },
+                                onShareBackup = { res -> viewModel.shareBackupResult(res) },
+                                onSendBackupToGroup = { res ->
+                                    viewModel.sendBackupToGroup(res)
+                                    navigateTab(ROUTE_GROUP)
+                                },
+                                onClearBackupStatus = { viewModel.clearBackupStatus() }
                             )
                         }
                     }

@@ -215,4 +215,64 @@
     <string name="perm_camera_needed">Camera permission is needed to scan Host QR codes for direct pairing.</string>
     <string name="perm_wifi_service">Wi-Fi Radio Enabled</string>
     <string name="perm_location_service">System Location Enabled</string>
+
+    <!-- Auto-Receive, Received Files Controls, Stepper & ETA -->
+    <string name="hub_auto_receive">Auto-receive sent files immediately</string>
+    <string name="hub_received_files_title">Received Files (%1$d)</string>
+    <string name="hub_received_files_empty">Files sent to this group will arrive here automatically.</string>
+    <string name="hub_tab_files">Files</string>
+    <string name="hub_tab_peers">Peers</string>
+    <string name="hub_tab_chat">Chat</string>
+    <string name="hub_qr_tap_zoom">Tap QR to enlarge</string>
+    <string name="hub_step_1">1. Setting up direct radio</string>
+    <string name="hub_step_2">2. Opening encrypted channel</string>
+    <string name="hub_step_3">3. Verifying &amp; awaiting approval</string>
+    <string name="hub_step_4">4. Connected (AES-256-GCM)</string>
+    <string name="hub_eta_left">%1$s left</string>
+    <string name="action_open_file">Open File</string>
+    <string name="action_install_app">Install App</string>
+    <string name="action_move_to_vault">Move to Encrypted Vault</string>
+    <string name="action_copy_to_folder">Copy to Folder / SD</string>
+    <string name="action_move_to_folder">Move to Folder / SD</string>
+    <string name="action_rename">Rename File</string>
+    <string name="action_share_external">Share Externally</string>
+    <string name="action_reshare_group">Re-share to Group</string>
+    <string name="action_file_details">Security &amp; SHA-256 Info</string>
+    <string name="action_delete_file">Delete File</string>
+    <string name="details_sender_label">Sender: %1$s</string>
+    <string name="details_location_label">Location: %1$s</string>
+    <string name="details_sha256_label">SHA-256: %1$s</string>
+    <string name="rename_hint">New file name</string>
+    <string name="delete_confirm_title">Delete this file?</string>
+    <string name="delete_confirm_body">Remove %1$s permanently from storage?</string>
+
+    <!-- Backup & Restore Center -->
+    <string name="nav_backup">Backup</string>
+    <string name="backup_title">Backup &amp; Restore Center</string>
+    <string name="backup_tab_apps">Apps</string>
+    <string name="backup_tab_files">Files &amp; Folders</string>
+    <string name="backup_tab_vault">Vault &amp; Data</string>
+    <string name="backup_dest_label">Destination: %1$s</string>
+    <string name="backup_dest_default">Downloads/NexoDrop/Backups</string>
+    <string name="backup_choose_folder">Choose Folder / SD Card</string>
+    <string name="backup_zip_bundle">Compress into single .zip archive</string>
+    <string name="backup_incremental">Incremental sync (skip unchanged files)</string>
+    <string name="backup_include_system_apps">Include system apps</string>
+    <string name="backup_start_apps">Back Up Selected Apps (%1$d)</string>
+    <string name="backup_start_files">Start Files &amp; Folder Backup</string>
+    <string name="backup_select_all">Select All</string>
+    <string name="backup_password_label">Encryption Password (min 4 chars)</string>
+    <string name="backup_start_encrypted">Export Encrypted Backup (.nxbackup)</string>
+    <string name="backup_restore_title">Restore Encrypted Backup (.nxbackup)</string>
+    <string name="backup_restore_button">Pick .nxbackup File &amp; Restore</string>
+    <string name="backup_success_msg">Backed up %1$d item(s) (%2$s)</string>
+    <string name="backup_skipped_msg">Skipped unchanged: %1$d</string>
+    <string name="backup_restore_success">Restored: %1$d vault files, %2$d apps, %3$d records</string>
+    <string name="backup_send_to_group">Send Backup to Group</string>
+    <string name="backup_share_external">Share Backup File</string>
+    <string name="backup_select_folder_source">Source Folder: %1$s</string>
+    <string name="msg_file_renamed">File renamed</string>
+    <string name="msg_file_deleted">File deleted</string>
+    <string name="msg_file_copied">File copied to selected folder</string>
+    <string name="msg_file_moved">File moved to selected folder</string>
 </resources>

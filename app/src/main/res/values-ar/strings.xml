@@ -215,4 +215,64 @@
     <string name="perm_camera_needed">إذن الكاميرا مطلوب لمسح رمز QR والاتصال المباشر.</string>
     <string name="perm_wifi_service">تشغيل Wi-Fi بالنظام</string>
     <string name="perm_location_service">تفعيل خدمة الموقع بالنظام</string>
+
+    <!-- الاستلام المباشر وإدارة الملفات والنسخ الاحتياطي -->
+    <string name="hub_auto_receive">استلام الملفات المرسلة تلقائياً وفوراً</string>
+    <string name="hub_received_files_title">الملفات المستلمة (%1$d)</string>
+    <string name="hub_received_files_empty">ستظهر الملفات المرسلة إلى المجموعة هنا تلقائياً مع كامل أدوات التحكم.</string>
+    <string name="hub_tab_files">الملفات</string>
+    <string name="hub_tab_peers">الأجهزة</string>
+    <string name="hub_tab_chat">الدردشة</string>
+    <string name="hub_qr_tap_zoom">اضغط على رمز QR للتكبير</string>
+    <string name="hub_step_1">1. تهيئة الاتصال المباشر</string>
+    <string name="hub_step_2">2. فتح القناة المشفرة</string>
+    <string name="hub_step_3">3. التحقق وانتظار الموافقة</string>
+    <string name="hub_step_4">4. متصل بأمان (AES-256-GCM)</string>
+    <string name="hub_eta_left">متبقي %1$s</string>
+    <string name="action_open_file">فتح الملف</string>
+    <string name="action_install_app">تثبيت التطبيق</string>
+    <string name="action_move_to_vault">نقل إلى الخزنة المشفرة</string>
+    <string name="action_copy_to_folder">نسخ إلى مجلد / بطاقة SD</string>
+    <string name="action_move_to_folder">نقل إلى مجلد / بطاقة SD</string>
+    <string name="action_rename">إعادة تسمية الملف</string>
+    <string name="action_share_external">مشاركة خارجياً</string>
+    <string name="action_reshare_group">إعادة إرسال للمجموعة</string>
+    <string name="action_file_details">تفاصيل الأمان وبصمة SHA-256</string>
+    <string name="action_delete_file">حذف الملف</string>
+    <string name="details_sender_label">المرسل: %1$s</string>
+    <string name="details_location_label">مكان الحفظ: %1$s</string>
+    <string name="details_sha256_label">بصمة SHA-256: %1$s</string>
+    <string name="rename_hint">اسم الملف الجديد</string>
+    <string name="delete_confirm_title">حذف هذا الملف؟</string>
+    <string name="delete_confirm_body">هل تريد حذف %1$s نهائياً من الذاكرة؟</string>
+
+    <!-- مركز النسخ الاحتياطي والاستعادة -->
+    <string name="nav_backup">النسخ الاحتياطي</string>
+    <string name="backup_title">مركز النسخ الاحتياطي والاستعادة</string>
+    <string name="backup_tab_apps">التطبيقات</string>
+    <string name="backup_tab_files">الملفات والمجلدات</string>
+    <string name="backup_tab_vault">الخزنة والبيانات</string>
+    <string name="backup_dest_label">الوجهة: %1$s</string>
+    <string name="backup_dest_default">Downloads/NexoDrop/Backups</string>
+    <string name="backup_choose_folder">اختر مجلد الحفظ / بطاقة SD</string>
+    <string name="backup_zip_bundle">ضغط النسخة في ملف .zip واحد</string>
+    <string name="backup_incremental">مزامنة تزايدية (تخطي الملفات غير المتغيرة)</string>
+    <string name="backup_include_system_apps">تضمين تطبيقات النظام</string>
+    <string name="backup_start_apps">نسخ التطبيقات المحددة (%1$d)</string>
+    <string name="backup_start_files">بدء نسخ الملفات والمجلدات</string>
+    <string name="backup_select_all">تحديد الكل</string>
+    <string name="backup_password_label">كلمة مرور التشفير (4 أحرف على الأقل)</string>
+    <string name="backup_start_encrypted">تصدير نسخة مشفرة (.nxbackup)</string>
+    <string name="backup_restore_title">استعادة نسخة مشفرة (.nxbackup)</string>
+    <string name="backup_restore_button">اختيار ملف .nxbackup والاستعادة</string>
+    <string name="backup_success_msg">تم النسخ الاحتياطي لـ %1$d عنصر (%2$s)</string>
+    <string name="backup_skipped_msg">تم تخطي %1$d ملف لم يتغير</string>
+    <string name="backup_restore_success">تمت الاستعادة: %1$d ملف خزنة، %2$d تطبيق، %3$d سجل</string>
+    <string name="backup_send_to_group">إرسال النسخة للمجموعة</string>
+    <string name="backup_share_external">مشاركة ملف النسخة الاحتياطية</string>
+    <string name="backup_select_folder_source">المجلد المصدر: %1$s</string>
+    <string name="msg_file_renamed">تمت إعادة تسمية الملف</string>
+    <string name="msg_file_deleted">تم حذف الملف</string>
+    <string name="msg_file_copied">تم نسخ الملف إلى المجلد المحدد</string>
+    <string name="msg_file_moved">تم نقل الملف إلى المجلد المحدد</string>
 </resources>

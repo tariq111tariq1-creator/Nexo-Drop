@@ -33,4 +33,18 @@ object Formatters {
         val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
         return sdf.format(Date(epochMs))
     }
+
+    fun formatEta(remainingBytes: Long, speedBytesPerSec: Long): String {
+        if (remainingBytes <= 0L || speedBytesPerSec <= 0L) return "…"
+        val secs = remainingBytes / speedBytesPerSec
+        return when {
+            secs < 60L -> "${secs}s"
+            secs < 3600L -> "${secs / 60}m ${secs % 60}s"
+            else -> "${secs / 3600}h ${(secs % 3600) / 60}m"
+        }
+    }
+
+    fun formatBackupStamp(epochMs: Long = System.currentTimeMillis()): String {
+        return SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(epochMs))
+    }
 }

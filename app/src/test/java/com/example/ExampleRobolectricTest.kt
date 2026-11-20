@@ -80,4 +80,48 @@ class ExampleRobolectricTest {
         assertEquals(45892, parsedUri?.hostPort)
         assertEquals("Test", parsedUri?.groupName)
     }
+
+    @Test
+    fun `formatEta returns readable remaining duration strings`() {
+        assertEquals("…", com.example.util.Formatters.formatEta(0L, 1000L))
+        assertEquals("…", com.example.util.Formatters.formatEta(1000L, 0L))
+        assertEquals("5s", com.example.util.Formatters.formatEta(5000L, 1000L))
+        assertEquals("2m 10s", com.example.util.Formatters.formatEta(130_000L, 1000L))
+        assertEquals("1h 5m", com.example.util.Formatters.formatEta(3900_000L, 1000L))
+    }
+
+    @Test
+    fun `backupManager creates zip bundle from folder files`() = kotlinx.coroutines.runBlocking {
+        val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
+        val tempDir = java.io.File(app.cacheDir, "test_backup_src_${System.currentTimeMillis()}").apply { mkdirs() }
+        val sampleFile = java.io.File(tempDir, "notes.txt").apply {
+            writeText("NexoDrop offline encrypted transfer note")
+        }
+        try {
+            val result = app.backupManager.backupFilesAndFolders(
+                sourceFolderPath = tempDir.absolutePath,
+                selectedFiles = emptyList(),
+                compressZip = true,
+                incrementalOnly = false,
+                targetTreeUri = null
+            )
+            assertTrue("Expected ZIP backup success, error=${result.error}", result.success)
+            assertEquals(1, result.fileCount)
+            assertTrue(result.totalBytes > 0L)
+            assertTrue(result.summaryLabel.endsWith(".zip"))
+        } finally {
+            sampleFile.delete()
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `p2pGroupManager toggles autoReceiveFiles state cleanly`() {
+        val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
+        assertTrue(app.p2pManager.state.value.autoReceiveFiles)
+        app.p2pManager.setAutoReceiveFiles(false)
+        assertFalse(app.p2pManager.state.value.autoReceiveFiles)
+        app.p2pManager.setAutoReceiveFiles(true)
+        assertTrue(app.p2pManager.state.value.autoReceiveFiles)
+    }
 }

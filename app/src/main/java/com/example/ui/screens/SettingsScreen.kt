@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Language
@@ -71,7 +72,8 @@ fun SettingsScreen(
     onSetBiometric: (Boolean) -> Unit,
     onSetSilentNotif: (Boolean) -> Unit,
     onSetCompleteOnlyNotif: (Boolean) -> Unit,
-    onRefreshPermissions: () -> Unit
+    onRefreshPermissions: () -> Unit,
+    onOpenBackupCenter: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var deviceNameDraft by remember(settings.deviceName) { mutableStateOf(settings.deviceName) }
@@ -221,6 +223,23 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
+                    }
+                }
+            }
+
+            // 3b. Backup & Restore Center
+            item {
+                SectionCard(title = stringResource(R.string.backup_title)) {
+                    Button(
+                        onClick = onOpenBackupCenter,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("settings_open_backup_button")
+                    ) {
+                        Icon(Icons.Rounded.Backup, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.nav_backup))
                     }
                 }
             }

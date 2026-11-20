@@ -54,8 +54,7 @@ object PermissionsHelper {
     }
 
     fun getSnapshot(context: Context): PermissionSnapshot {
-        val location = hasPerm(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
-            hasPerm(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+        val location = hasPerm(context, Manifest.permission.ACCESS_FINE_LOCATION)
 
         val nearby = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             hasPerm(context, Manifest.permission.NEARBY_WIFI_DEVICES)

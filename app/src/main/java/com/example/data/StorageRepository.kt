@@ -384,7 +384,8 @@ class StorageRepository(
                         displayLocation = settings.customSaveLabel.ifBlank { created.uri.toString() },
                         isInVault = false,
                         vaultItem = null,
-                        outputUri = created.uri
+                        outputUri = created.uri,
+                        filePath = null
                     )
                 }
             }
@@ -432,7 +433,8 @@ class StorageRepository(
                     displayLocation = relativePath,
                     isInVault = false,
                     vaultItem = null,
-                    outputUri = itemUri
+                    outputUri = itemUri,
+                    filePath = null
                 )
             }
         }
@@ -451,7 +453,8 @@ class StorageRepository(
             displayLocation = outFile.parent ?: "Downloads/NexoDrop",
             isInVault = false,
             vaultItem = null,
-            outputUri = uri
+            outputUri = uri,
+            filePath = outFile.absolutePath
         )
     }
 
@@ -617,6 +620,127 @@ class StorageRepository(
         context.startActivity(Intent.createChooser(intent, file.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    fun getAvailableStorageBytes(): Long {
+        return runCatching {
+            val stat = android.os.StatFs(Environment.getExternalStorageDirectory().path)
+            stat.availableBytes
+        }.getOrDefault(Long.MAX_VALUE)
+    }
+
+    suspend fun openReceivedFile(uri: Uri?, filePath: String?, fileName: String, mimeType: String) {
+        val lower = fileName.lowercase()
+        if (lower.endsWith(".apk") || lower.endsWith(".apks")) {
+            val installFile = withContext(Dispatchers.IO) {
+                if (filePath != null && File(filePath).exists()) {
+                    File(filePath)
+                } else {
+                    val cacheDir = File(context.cacheDir, "apk_install").apply { if (!exists()) mkdirs() }
+                    val safe = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                    val temp = File(cacheDir, safe)
+                    openInputStream(uri, filePath).use { input ->
+                        temp.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+                    }
+                    temp
+                }
+            }
+            installApkOrApks(installFile)
+            return
+        }
+        val resolvedUri = when {
+            filePath != null && File(filePath).exists() ->
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(filePath))
+            uri != null -> uri
+            else -> return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(resolvedUri, mimeType.ifBlank { guessMimeType(fileName) })
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, fileName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    fun shareReceivedFile(uri: Uri?, filePath: String?, fileName: String, mimeType: String) {
+        val resolvedUri = when {
+            filePath != null && File(filePath).exists() ->
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(filePath))
+            uri != null -> uri
+            else -> return
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType.ifBlank { guessMimeType(fileName) }
+            putExtra(Intent.EXTRA_STREAM, resolvedUri)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, fileName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    suspend fun renameReceivedFile(uri: Uri?, filePath: String?, newName: String): Pair<Uri?, String?> =
+        withContext(Dispatchers.IO) {
+            val clean = newName.trim()
+            if (clean.isEmpty()) return@withContext uri to filePath
+            if (filePath != null) {
+                val src = File(filePath)
+                if (src.exists()) {
+                    val dst = File(src.parentFile, clean)
+                    if (src.renameTo(dst)) {
+                        val newUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dst)
+                        return@withContext newUri to dst.absolutePath
+                    }
+                }
+            }
+            if (uri != null) {
+                val doc = runCatching { DocumentFile.fromSingleUri(context, uri) }.getOrNull()
+                if (doc != null && doc.renameTo(clean)) {
+                    return@withContext doc.uri to null
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val vals = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, clean) }
+                    val updated = runCatching { context.contentResolver.update(uri, vals, null, null) }.getOrDefault(0)
+                    if (updated > 0) return@withContext uri to null
+                }
+            }
+            uri to filePath
+        }
+
+    suspend fun copyOrMoveReceivedFileToFolder(
+        uri: Uri?,
+        filePath: String?,
+        fileName: String,
+        mimeType: String,
+        targetTreeUri: Uri,
+        deleteOriginal: Boolean
+    ): Uri? = withContext(Dispatchers.IO) {
+        val treeDoc = DocumentFile.fromTreeUri(context, targetTreeUri) ?: return@withContext null
+        if (!treeDoc.canWrite()) return@withContext null
+        val created = treeDoc.createFile(mimeType.ifBlank { guessMimeType(fileName) }, fileName)
+            ?: return@withContext null
+        openInputStream(uri, filePath).use { input ->
+            context.contentResolver.openOutputStream(created.uri)?.use { out ->
+                input.copyTo(out, 64 * 1024)
+            }
+        }
+        if (deleteOriginal) {
+            deleteReceivedFile(uri, filePath)
+        }
+        created.uri
+    }
+
+    suspend fun deleteReceivedFile(uri: Uri?, filePath: String?): Boolean = withContext(Dispatchers.IO) {
+        var deleted = false
+        if (filePath != null) {
+            val f = File(filePath)
+            if (f.exists()) deleted = f.delete()
+        }
+        if (!deleted && uri != null) {
+            deleted = runCatching {
+                val doc = DocumentFile.fromSingleUri(context, uri)
+                if (doc != null && doc.exists()) doc.delete()
+                else context.contentResolver.delete(uri, null, null) > 0
+            }.getOrDefault(false)
+        }
+        deleted
+    }
+
     fun guessMimeType(fileName: String): String {
         val ext = fileName.substringAfterLast('.', "").lowercase()
         if (ext == "apk") return "application/vnd.android.package-archive"
@@ -629,7 +753,8 @@ data class SavedOutputResult(
     val displayLocation: String,
     val isInVault: Boolean,
     val vaultItem: VaultItemEntity?,
-    val outputUri: Uri?
+    val outputUri: Uri?,
+    val filePath: String? = null
 )
 
 class PackageInstallerStatusReceiver : android.content.BroadcastReceiver() {

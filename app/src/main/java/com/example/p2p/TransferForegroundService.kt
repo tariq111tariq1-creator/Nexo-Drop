@@ -96,9 +96,50 @@ class TransferForegroundService : Service() {
         }
     }
 
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
+    @Suppress("DEPRECATION")
+    private fun acquirePerformanceLocks() {
+        runCatching {
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                wakeLock = pm?.newWakeLock(
+                    android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                    "NexoDrop::TransferWakeLock"
+                )?.apply { setReferenceCounted(false) }
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(60 * 60 * 1000L)
+            }
+        }
+        runCatching {
+            if (wifiLock == null) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wm?.createWifiLock(mode, "NexoDrop::TransferWifiLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wifiLock?.isHeld == false) {
+                wifiLock?.acquire()
+            }
+        }
+    }
+
+    private fun releasePerformanceLocks() {
+        runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
+        runCatching { if (wifiLock?.isHeld == true) wifiLock?.release() }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        acquirePerformanceLocks()
         val groupName = intent?.getStringExtra(EXTRA_GROUP_NAME) ?: "NexoDrop"
         val port = intent?.getIntExtra(EXTRA_PORT, 0) ?: 0
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -129,5 +170,10 @@ class TransferForegroundService : Service() {
             startForeground(ONGOING_ID, notification)
         }
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        releasePerformanceLocks()
+        super.onDestroy()
     }
 }

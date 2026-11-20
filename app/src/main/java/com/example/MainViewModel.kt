@@ -4,10 +4,13 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.BackupProgress
+import com.example.data.BackupResult
 import com.example.data.DeviceFileItem
 import com.example.data.FileCategory
 import com.example.data.HiddenAppEntity
 import com.example.data.InstalledAppItem
+import com.example.data.RestoreResult
 import com.example.data.SaveLocationMode
 import com.example.data.StorageRootInfo
 import com.example.data.TransferRecordEntity
@@ -17,6 +20,7 @@ import com.example.p2p.GroupWorkspaceState
 import com.example.p2p.LocalSourceDescriptor
 import com.example.p2p.P2pEvent
 import com.example.p2p.PeerPermission
+import com.example.p2p.ReceivedGroupFile
 import com.example.p2p.ScannedQrResult
 import com.example.p2p.SharedGroupItem
 import com.example.p2p.TransferForegroundService
@@ -39,6 +43,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
+data class BackupUiState(
+    val inProgress: Boolean = false,
+    val progress: BackupProgress? = null,
+    val lastBackupResult: BackupResult? = null,
+    val lastRestoreResult: RestoreResult? = null
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as NexoDropApplication
@@ -46,6 +57,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = app.repository
     private val storageRepository = app.storageRepository
     private val vaultManager = app.vaultManager
+    private val backupManager = app.backupManager
     val p2pManager = app.p2pManager
 
     val settings: StateFlow<UserSettings> = preferences.settingsFlow
@@ -88,6 +100,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _languageChangeRequested = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val languageChangeRequested: SharedFlow<String> = _languageChangeRequested.asSharedFlow()
+
+    private val _backupState = MutableStateFlow(BackupUiState())
+    val backupState: StateFlow<BackupUiState> = _backupState.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -264,6 +279,266 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun sendChat(text: String) = p2pManager.sendChatMessage(text)
     fun downloadGroupItem(item: SharedGroupItem, toVault: Boolean) = p2pManager.downloadGroupItem(item, toVault)
     fun cancelTransfer(transferId: String) = p2pManager.cancelTransfer(transferId)
+    fun setAutoReceiveFiles(enabled: Boolean) = p2pManager.setAutoReceiveFiles(enabled)
+
+    // --- Received File Controls ---
+
+    fun openReceivedFile(file: ReceivedGroupFile) {
+        viewModelScope.launch {
+            if (file.isInVault && file.vaultItemId != null) {
+                val entity = vaultItems.value.firstOrNull { it.id == file.vaultItemId }
+                if (entity != null) {
+                    openVaultItem(entity)
+                    return@launch
+                }
+            }
+            runCatching {
+                storageRepository.openReceivedFile(file.outputUri, file.filePath, file.fileName, file.mimeType)
+            }.onFailure { err ->
+                _uiMessages.tryEmit(err.localizedMessage ?: "Unable to open file")
+            }
+        }
+    }
+
+    fun shareReceivedFileExternally(file: ReceivedGroupFile) {
+        if (file.isInVault && file.vaultItemId != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val entity = vaultItems.value.firstOrNull { it.id == file.vaultItemId } ?: return@launch
+                val temp = vaultManager.decryptToTempPreviewFile(entity.encryptedFileName, entity.originalName)
+                withContext(Dispatchers.Main) {
+                    storageRepository.shareReceivedFile(null, temp.absolutePath, entity.originalName, entity.mimeType)
+                }
+            }
+            return
+        }
+        storageRepository.shareReceivedFile(file.outputUri, file.filePath, file.fileName, file.mimeType)
+    }
+
+    fun moveReceivedFileToVault(file: ReceivedGroupFile) {
+        if (file.isInVault) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val encRes = storageRepository.openInputStream(file.outputUri, file.filePath).use { input ->
+                    vaultManager.encryptIntoVault(input)
+                }
+                val insertedId = repository.addVaultItem(
+                    VaultItemEntity(
+                        originalName = file.fileName,
+                        encryptedFileName = encRes.encryptedFileName,
+                        fileSize = encRes.plainSize,
+                        mimeType = file.mimeType,
+                        category = file.category.name,
+                        sha256 = encRes.sha256,
+                        originalUriOrPath = "vault://${encRes.encryptedFileName}"
+                    )
+                )
+                storageRepository.deleteReceivedFile(file.outputUri, file.filePath)
+                p2pManager.updateReceivedFile(file.id) {
+                    it.copy(
+                        isInVault = true,
+                        vaultItemId = insertedId,
+                        savedLocation = "Private Vault",
+                        outputUri = null,
+                        filePath = null
+                    )
+                }
+                _uiMessages.tryEmit(app.getString(R.string.msg_saved_to_vault))
+            }.onFailure { err ->
+                _uiMessages.tryEmit(err.localizedMessage ?: "Failed to move to vault")
+            }
+        }
+    }
+
+    fun renameReceivedFile(file: ReceivedGroupFile, newName: String) {
+        val clean = newName.trim()
+        if (clean.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val (updatedUri, updatedPath) = storageRepository.renameReceivedFile(file.outputUri, file.filePath, clean)
+            p2pManager.updateReceivedFile(file.id) {
+                it.copy(fileName = clean, outputUri = updatedUri, filePath = updatedPath)
+            }
+            _uiMessages.tryEmit(app.getString(R.string.msg_file_renamed))
+        }
+    }
+
+    fun copyOrMoveReceivedFile(file: ReceivedGroupFile, targetTreeUri: Uri, deleteOriginal: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val destUri = storageRepository.copyOrMoveReceivedFileToFolder(
+                    uri = file.outputUri,
+                    filePath = file.filePath,
+                    fileName = file.fileName,
+                    mimeType = file.mimeType,
+                    targetTreeUri = targetTreeUri,
+                    deleteOriginal = deleteOriginal
+                )
+                if (destUri != null) {
+                    val folderLabel = storageRepository.getTreeDisplayName(targetTreeUri)
+                    if (deleteOriginal) {
+                        p2pManager.updateReceivedFile(file.id) {
+                            it.copy(savedLocation = folderLabel, outputUri = destUri, filePath = null)
+                        }
+                        _uiMessages.tryEmit(app.getString(R.string.msg_file_moved))
+                    } else {
+                        _uiMessages.tryEmit(app.getString(R.string.msg_file_copied))
+                    }
+                }
+            }.onFailure { err ->
+                _uiMessages.tryEmit(err.localizedMessage ?: "Folder operation failed")
+            }
+        }
+    }
+
+    fun reshareReceivedFileToGroup(file: ReceivedGroupFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (file.isInVault && file.vaultItemId != null) {
+                val entity = vaultItems.value.firstOrNull { it.id == file.vaultItemId } ?: return@launch
+                val temp = vaultManager.decryptToTempPreviewFile(entity.encryptedFileName, entity.originalName)
+                p2pManager.addFilesToSharedGroup(
+                    listOf(
+                        LocalSourceDescriptor(
+                            itemId = UUID.randomUUID().toString().take(10),
+                            fileName = entity.originalName,
+                            fileSize = temp.length(),
+                            mimeType = entity.mimeType,
+                            uri = null,
+                            filePath = temp.absolutePath,
+                            isAppPackage = entity.originalName.lowercase().endsWith(".apk") || entity.originalName.lowercase().endsWith(".apks"),
+                            sha256 = entity.sha256
+                        )
+                    )
+                )
+            } else {
+                p2pManager.addFilesToSharedGroup(
+                    listOf(
+                        LocalSourceDescriptor(
+                            itemId = UUID.randomUUID().toString().take(10),
+                            fileName = file.fileName,
+                            fileSize = file.fileSize,
+                            mimeType = file.mimeType,
+                            uri = file.outputUri,
+                            filePath = file.filePath,
+                            isAppPackage = file.fileName.lowercase().endsWith(".apk") || file.fileName.lowercase().endsWith(".apks"),
+                            sha256 = file.sha256
+                        )
+                    )
+                )
+            }
+            _uiMessages.tryEmit(app.getString(R.string.msg_added_to_group, 1))
+        }
+    }
+
+    fun deleteReceivedFile(file: ReceivedGroupFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (file.isInVault && file.vaultItemId != null) {
+                val entity = vaultItems.value.firstOrNull { it.id == file.vaultItemId }
+                if (entity != null) {
+                    vaultManager.deleteEncryptedFile(entity.encryptedFileName)
+                    repository.removeVaultItem(entity.id)
+                }
+            } else {
+                storageRepository.deleteReceivedFile(file.outputUri, file.filePath)
+            }
+            p2pManager.removeReceivedFile(file.id)
+            _uiMessages.tryEmit(app.getString(R.string.msg_file_deleted))
+        }
+    }
+
+    // --- Backup & Restore Center ---
+
+    fun clearBackupStatus() {
+        _backupState.value = BackupUiState()
+    }
+
+    fun backupApps(apps: List<InstalledAppItem>, compressAsZip: Boolean, targetTreeUri: Uri?) {
+        viewModelScope.launch {
+            _backupState.value = BackupUiState(inProgress = true)
+            val result = backupManager.backupInstalledApps(apps, compressAsZip, targetTreeUri) { prog ->
+                _backupState.value = _backupState.value.copy(progress = prog)
+            }
+            _backupState.value = BackupUiState(inProgress = false, lastBackupResult = result)
+            result.error?.let { _uiMessages.tryEmit(it) }
+        }
+    }
+
+    fun backupFiles(
+        sourceFolderPath: String?,
+        selectedFiles: List<DeviceFileItem>,
+        compressZip: Boolean,
+        incrementalOnly: Boolean,
+        targetTreeUri: Uri?
+    ) {
+        viewModelScope.launch {
+            _backupState.value = BackupUiState(inProgress = true)
+            val result = backupManager.backupFilesAndFolders(
+                sourceFolderPath = sourceFolderPath,
+                selectedFiles = selectedFiles,
+                compressZip = compressZip,
+                incrementalOnly = incrementalOnly,
+                targetTreeUri = targetTreeUri
+            ) { prog ->
+                _backupState.value = _backupState.value.copy(progress = prog)
+            }
+            _backupState.value = BackupUiState(inProgress = false, lastBackupResult = result)
+            result.error?.let { _uiMessages.tryEmit(it) }
+        }
+    }
+
+    fun exportEncryptedBackup(password: String, targetTreeUri: Uri?) {
+        viewModelScope.launch {
+            _backupState.value = BackupUiState(inProgress = true)
+            val result = backupManager.exportEncryptedAppBackup(password, targetTreeUri, settings.value) { prog ->
+                _backupState.value = _backupState.value.copy(progress = prog)
+            }
+            _backupState.value = BackupUiState(inProgress = false, lastBackupResult = result)
+            result.error?.let { _uiMessages.tryEmit(it) }
+        }
+    }
+
+    fun restoreEncryptedBackup(backupUri: Uri, password: String) {
+        viewModelScope.launch {
+            _backupState.value = BackupUiState(inProgress = true)
+            val result = backupManager.restoreEncryptedAppBackup(backupUri, password) { prog ->
+                _backupState.value = _backupState.value.copy(progress = prog)
+            }
+            _backupState.value = BackupUiState(inProgress = false, lastRestoreResult = result)
+            result.error?.let { _uiMessages.tryEmit(it) }
+        }
+    }
+
+    fun shareBackupResult(result: BackupResult) {
+        val uri = result.outputUri
+        val path = result.outputPath
+        val name = result.summaryLabel.ifBlank { "backup" }
+        storageRepository.shareReceivedFile(uri, path?.takeIf { File(it).isFile }, name, storageRepository.guessMimeType(name))
+    }
+
+    fun sendBackupToGroup(result: BackupResult) {
+        val uri = result.outputUri
+        val path = result.outputPath?.takeIf { File(it).isFile }
+        if (uri == null && path == null) {
+            _uiMessages.tryEmit("Compress into ZIP or .nxbackup to send over group")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val fileName = result.summaryLabel.ifBlank { "NexoDrop_Backup.zip" }
+            val size = if (path != null) File(path).length() else result.totalBytes
+            p2pManager.addFilesToSharedGroup(
+                listOf(
+                    LocalSourceDescriptor(
+                        itemId = UUID.randomUUID().toString().take(10),
+                        fileName = fileName,
+                        fileSize = size,
+                        mimeType = storageRepository.guessMimeType(fileName),
+                        uri = uri,
+                        filePath = path,
+                        isAppPackage = false
+                    )
+                )
+            )
+            _uiMessages.tryEmit(app.getString(R.string.msg_added_to_group, 1))
+        }
+    }
 
     fun shareSelectedToGroup(
         selectedApps: List<InstalledAppItem>,

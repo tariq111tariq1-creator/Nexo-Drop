@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FilterList
@@ -100,7 +101,8 @@ fun ExplorerScreen(
     onCreateNoMedia: () -> Unit,
     onShareToGroup: (List<InstalledAppItem>, List<DeviceFileItem>, List<Uri>) -> Unit,
     onHideFilesInVault: (List<DeviceFileItem>, List<Uri>) -> Unit,
-    onHideApps: (List<InstalledAppItem>) -> Unit
+    onHideApps: (List<InstalledAppItem>) -> Unit,
+    onOpenBackupCenter: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -244,6 +246,12 @@ fun ExplorerScreen(
                             Text(label)
                         },
                         leadingIcon = { Icon(Icons.Rounded.FilterList, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    )
+                    AssistChip(
+                        onClick = onOpenBackupCenter,
+                        label = { Text(stringResource(R.string.nav_backup)) },
+                        leadingIcon = { Icon(Icons.Rounded.Backup, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        modifier = Modifier.testTag("explorer_backup_chip")
                     )
                 }
             }

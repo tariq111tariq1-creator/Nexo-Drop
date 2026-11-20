@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.rounded.GroupAdd
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Radar
@@ -60,11 +62,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -85,6 +90,7 @@ import com.example.p2p.DiscoveredGroup
 import com.example.p2p.GroupRole
 import com.example.p2p.GroupWorkspaceState
 import com.example.p2p.PeerPermission
+import com.example.p2p.ReceivedGroupFile
 import com.example.p2p.ScannedQrResult
 import com.example.p2p.SharedGroupItem
 import com.example.p2p.WifiDirectPeer
@@ -93,6 +99,7 @@ import com.example.ui.components.CategoryBadge
 import com.example.ui.components.EncryptionPill
 import com.example.ui.components.QrCodeCard
 import com.example.ui.components.QrScannerDialog
+import com.example.ui.components.ReceivedFileActionsSheet
 import com.example.util.Formatters
 import com.example.util.PermissionSnapshot
 import com.example.util.PermissionsHelper
@@ -111,6 +118,7 @@ fun GroupHubScreen(
     onConnectDirectPeer: (WifiDirectPeer, String) -> Unit,
     onStartFallbackHotspot: () -> Unit,
     onToggleLocalNetwork: (Boolean) -> Unit,
+    onToggleAutoReceive: (Boolean) -> Unit,
     onParseQr: (String) -> ScannedQrResult?,
     onJoinViaDirectCredentials: (ssid: String, pass: String, ip: String, port: Int, groupName: String, pin: String) -> Unit,
     onCreateGroup: (name: String, pin: String, autoApprove: Boolean, webShare: Boolean) -> Unit,
@@ -120,10 +128,18 @@ fun GroupHubScreen(
     onUpdatePeerPermission: (deviceId: String, permission: PeerPermission) -> Unit,
     onKickOrBanPeer: (deviceId: String, ban: Boolean) -> Unit,
     onNavigateToExplorer: () -> Unit,
+    onOpenBackupCenter: () -> Unit,
     onAddPickedUris: (List<android.net.Uri>) -> Unit,
     onDownloadItem: (SharedGroupItem, toVault: Boolean) -> Unit,
     onCancelTransfer: (String) -> Unit,
     onSendChat: (String) -> Unit,
+    onOpenReceivedFile: (ReceivedGroupFile) -> Unit,
+    onMoveReceivedToVault: (ReceivedGroupFile) -> Unit,
+    onCopyOrMoveReceivedFile: (ReceivedGroupFile, android.net.Uri, Boolean) -> Unit,
+    onRenameReceivedFile: (ReceivedGroupFile, String) -> Unit,
+    onShareReceivedExternal: (ReceivedGroupFile) -> Unit,
+    onReshareReceivedToGroup: (ReceivedGroupFile) -> Unit,
+    onDeleteReceivedFile: (ReceivedGroupFile) -> Unit,
     onClearError: () -> Unit
 ) {
     val context = LocalContext.current
@@ -138,6 +154,8 @@ fun GroupHubScreen(
     var joinTargetQr by remember { mutableStateOf<ScannedQrResult?>(null) }
     var qrInvalidWarning by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
+    var selectedReceivedFile by remember { mutableStateOf<ReceivedGroupFile?>(null) }
+    var activeGroupTab by remember { mutableIntStateOf(0) }
     var chatInput by remember { mutableStateOf("") }
 
     val quickFilePicker = rememberLauncherForActivityResult(
@@ -444,6 +462,14 @@ fun GroupHubScreen(
                                         label = { Text(stringResource(R.string.hub_join_manual)) },
                                         modifier = Modifier.testTag("manual_join_button")
                                     )
+                                    AssistChip(
+                                        onClick = onOpenBackupCenter,
+                                        label = { Text(stringResource(R.string.nav_backup)) },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.Backup, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        },
+                                        modifier = Modifier.testTag("hub_open_backup_chip")
+                                    )
                                 }
                             }
                         }
@@ -607,12 +633,25 @@ fun GroupHubScreen(
                             ) {
                                 CircularProgressIndicator()
                                 Spacer(modifier = Modifier.height(16.dp))
+                                val stepLabel = when (state.connectionStep) {
+                                    1 -> stringResource(R.string.hub_step_1)
+                                    2 -> stringResource(R.string.hub_step_2)
+                                    3 -> stringResource(R.string.hub_step_3)
+                                    else -> stringResource(R.string.hub_waiting_approval)
+                                }
                                 Text(
-                                    text = stringResource(R.string.hub_waiting_approval),
+                                    text = stepLabel,
                                     style = MaterialTheme.typography.titleMedium
                                 )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                LinearProgressIndicator(
+                                    progress = { (state.connectionStep.coerceIn(1, 4)) / 4f },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                )
                                 if (state.keyFingerprint.isNotBlank()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Spacer(modifier = Modifier.height(10.dp))
                                     EncryptionPill(
                                         text = stringResource(R.string.hub_e2ee_verified, state.keyFingerprint)
                                     )
@@ -630,7 +669,7 @@ fun GroupHubScreen(
                 }
 
                 ConnectionPhase.HOSTING, ConnectionPhase.CONNECTED -> {
-                    // 1. Active Group Header Card
+                    // 1. Active Group Header Card with Large Centered Scannable QR
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -684,7 +723,7 @@ fun GroupHubScreen(
                                     text = stringResource(R.string.hub_e2ee_verified, state.keyFingerprint)
                                 )
 
-                                // Direct Device-to-Device Host Credentials + Embedded QR + Hotspot Fallback
+                                // Large Centered Scannable QR + Direct Host Credentials
                                 if (state.role == GroupRole.HOST) {
                                     Spacer(modifier = Modifier.height(12.dp))
                                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
@@ -696,44 +735,43 @@ fun GroupHubScreen(
                                         "nexodrop://${state.hostIp}:${state.hostPort}?name=${state.groupName}"
                                     }
 
-                                    Row(
+                                    Column(
                                         modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        QrCodeCard(content = qrText, size = 124.dp)
-                                        Column(
-                                            modifier = Modifier.weight(1f),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
+                                        QrCodeCard(
+                                            content = qrText,
+                                            size = 240.dp,
+                                            onClick = { showQrDialog = true }
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.hub_qr_tap_zoom),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        if (activeSsid.isNotBlank()) {
                                             Text(
-                                                text = stringResource(R.string.hub_direct_mode_badge),
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.primary
+                                                text = if (state.wifiDirect.hotspotActive) {
+                                                    stringResource(R.string.hub_direct_hotspot_active, activeSsid)
+                                                } else {
+                                                    stringResource(R.string.hub_wifi_direct_active, activeSsid)
+                                                },
+                                                style = MaterialTheme.typography.bodySmall
                                             )
-                                            if (activeSsid.isNotBlank()) {
-                                                Text(
-                                                    text = if (state.wifiDirect.hotspotActive) {
-                                                        stringResource(R.string.hub_direct_hotspot_active, activeSsid)
-                                                    } else {
-                                                        stringResource(R.string.hub_wifi_direct_active, activeSsid)
-                                                    },
-                                                    style = MaterialTheme.typography.bodySmall
-                                                )
-                                            }
-                                            if (activePass.isNotBlank()) {
-                                                Text(
-                                                    text = stringResource(R.string.hub_wifi_direct_pass, activePass),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
+                                        }
+                                        if (activePass.isNotBlank()) {
                                             Text(
-                                                text = stringResource(R.string.hub_direct_credentials_hint),
+                                                text = stringResource(R.string.hub_wifi_direct_pass, activePass),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
+                                        Text(
+                                            text = stringResource(R.string.hub_direct_credentials_hint),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
 
                                     Spacer(modifier = Modifier.height(10.dp))
@@ -806,7 +844,7 @@ fun GroupHubScreen(
                         }
                     }
 
-                    // 2. Pending Join Requests (Host only)
+                    // 2. Pending Join Requests Banner (Always visible to Host regardless of active tab)
                     if (state.role == GroupRole.HOST && state.pendingRequests.isNotEmpty()) {
                         item {
                             Card(
@@ -864,80 +902,59 @@ fun GroupHubScreen(
                         }
                     }
 
-                    // 3. Active Transfers Queue
-                    if (state.activeTransfers.isNotEmpty()) {
-                        item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .animateContentSize(),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.hub_active_transfers, state.activeTransfers.size),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    state.activeTransfers.forEach { t ->
-                                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    text = t.fileName,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                if (!t.isCompleted && t.error == null) {
-                                                    IconButton(onClick = { onCancelTransfer(t.transferId) }) {
-                                                        Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.hub_cancel))
-                                                    }
-                                                }
-                                            }
-                                            LinearProgressIndicator(
-                                                progress = { t.progress },
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(6.dp)
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = "${Formatters.formatBytes(t.bytesTransferred)} / ${Formatters.formatBytes(t.totalBytes)} • ${Formatters.formatSpeed(t.speedBytesPerSec)}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                    // 3. Clean Workspace Tabs: Files | Peers | Chat
+                    item {
+                        TabRow(selectedTabIndex = activeGroupTab) {
+                            Tab(
+                                selected = activeGroupTab == 0,
+                                onClick = { activeGroupTab = 0 },
+                                text = { Text("${stringResource(R.string.hub_tab_files)} (${state.receivedFiles.size + state.sharedItems.size})") }
+                            )
+                            Tab(
+                                selected = activeGroupTab == 1,
+                                onClick = { activeGroupTab = 1 },
+                                text = { Text("${stringResource(R.string.hub_tab_peers)} (${state.peers.size})") }
+                            )
+                            Tab(
+                                selected = activeGroupTab == 2,
+                                onClick = { activeGroupTab = 2 },
+                                text = { Text("${stringResource(R.string.hub_tab_chat)} (${state.chatMessages.size})") }
+                            )
                         }
                     }
 
-                    // 4. Shared Group Tray (Live Synced Files)
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.hub_shared_tray, state.sharedItems.size),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (activeGroupTab == 0) {
+                        // Auto-Receive Toggle + Backup Shortcut Card
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.hub_auto_receive),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Switch(
+                                            checked = state.autoReceiveFiles,
+                                            onCheckedChange = onToggleAutoReceive,
+                                            modifier = Modifier.testTag("auto_receive_switch")
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
                                         FilledTonalButton(
                                             onClick = { quickFilePicker.launch(arrayOf("*/*")) },
                                             modifier = Modifier
+                                                .weight(1f)
                                                 .height(48.dp)
                                                 .testTag("group_add_files_picker")
                                         ) {
@@ -951,153 +968,132 @@ fun GroupHubScreen(
                                         ) {
                                             Text(stringResource(R.string.nav_explorer))
                                         }
+                                        OutlinedButton(
+                                            onClick = onOpenBackupCenter,
+                                            modifier = Modifier.height(48.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Backup, contentDescription = stringResource(R.string.nav_backup), modifier = Modifier.size(18.dp))
+                                        }
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                if (state.sharedItems.isEmpty()) {
-                                    Text(
-                                        text = stringResource(R.string.hub_shared_tray_empty),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                } else {
-                                    state.sharedItems.forEach { item ->
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            CategoryBadge(category = item.category)
-                                            Spacer(modifier = Modifier.width(12.dp))
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = item.fileName,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                            }
+                        }
+
+                        // Active Transfers Queue with ETA
+                        if (state.activeTransfers.isNotEmpty()) {
+                            item {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .animateContentSize(),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(
+                                            text = stringResource(R.string.hub_active_transfers, state.activeTransfers.size),
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        state.activeTransfers.forEach { t ->
+                                            val remainingBytes = (t.totalBytes - t.bytesTransferred).coerceAtLeast(0L)
+                                            val etaText = Formatters.formatEta(remainingBytes, t.speedBytesPerSec)
+                                            Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = t.fileName,
+                                                        style = MaterialTheme.typography.bodyLarge,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    if (!t.isCompleted && t.error == null) {
+                                                        IconButton(onClick = { onCancelTransfer(t.transferId) }) {
+                                                            Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.hub_cancel))
+                                                        }
+                                                    }
+                                                }
+                                                LinearProgressIndicator(
+                                                    progress = { t.progress },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(6.dp)
                                                 )
+                                                Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
-                                                    text = "${Formatters.formatBytes(item.fileSize)} • ${item.ownerDeviceName}",
+                                                    text = buildString {
+                                                        append("${Formatters.formatBytes(t.bytesTransferred)} / ${Formatters.formatBytes(t.totalBytes)} • ${Formatters.formatSpeed(t.speedBytesPerSec)}")
+                                                        if (etaText.isNotBlank() && !t.isCompleted) {
+                                                            append(" • ${stringResource(R.string.hub_eta_left, etaText)}")
+                                                        }
+                                                    },
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
-                                            IconButton(
-                                                onClick = { onDownloadItem(item, false) },
-                                                modifier = Modifier.size(48.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Rounded.Download,
-                                                    contentDescription = stringResource(R.string.hub_download),
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                            IconButton(
-                                                onClick = { onDownloadItem(item, true) },
-                                                modifier = Modifier.size(48.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Rounded.Lock,
-                                                    contentDescription = stringResource(R.string.hub_download_vault),
-                                                    tint = MaterialTheme.colorScheme.tertiary
-                                                )
-                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // 5. Connected Devices & Host Permissions Controls
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Rounded.Devices, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(modifier = Modifier.width(8.dp))
+                        // Received Files with Complete In-App Controls
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
                                     Text(
-                                        text = stringResource(R.string.hub_members_title, state.peers.size),
+                                        text = stringResource(R.string.hub_received_files_title, state.receivedFiles.size),
                                         style = MaterialTheme.typography.titleMedium
                                     )
-                                }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                state.peers.forEach { peer ->
-                                    var menuExpanded by remember { mutableStateOf(false) }
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = "${peer.deviceName} (${if (peer.isHost) stringResource(R.string.hub_role_host) else stringResource(R.string.hub_role_member)})",
-                                                style = MaterialTheme.typography.bodyLarge
-                                            )
-                                            Text(
-                                                text = "${peer.ipAddress} • ${peer.permission.name} • Key: ${peer.keyFingerprint}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        if (state.role == GroupRole.HOST && !peer.isHost) {
-                                            Box {
-                                                TextButton(onClick = { menuExpanded = true }) {
-                                                    Text(stringResource(R.string.nav_settings))
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if (state.receivedFiles.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.hub_received_files_empty),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        state.receivedFiles.forEach { rf ->
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                CategoryBadge(category = rf.category)
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = rf.fileName,
+                                                        style = MaterialTheme.typography.bodyLarge,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = "${Formatters.formatBytes(rf.fileSize)} • ${rf.senderName} • ${rf.savedLocation}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = if (rf.isInVault) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
                                                 }
-                                                DropdownMenu(
-                                                    expanded = menuExpanded,
-                                                    onDismissRequest = { menuExpanded = false }
+                                                IconButton(
+                                                    onClick = { selectedReceivedFile = rf },
+                                                    modifier = Modifier
+                                                        .size(48.dp)
+                                                        .testTag("manage_received_file_${rf.id}")
                                                 ) {
-                                                    DropdownMenuItem(
-                                                        text = { Text(stringResource(R.string.hub_perm_full)) },
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            onUpdatePeerPermission(peer.deviceId, PeerPermission.FULL_ACCESS)
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(stringResource(R.string.hub_perm_receive)) },
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            onUpdatePeerPermission(peer.deviceId, PeerPermission.RECEIVE_ONLY)
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(stringResource(R.string.hub_perm_send)) },
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            onUpdatePeerPermission(peer.deviceId, PeerPermission.SEND_ONLY)
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(stringResource(R.string.hub_perm_view)) },
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            onUpdatePeerPermission(peer.deviceId, PeerPermission.VIEW_ONLY)
-                                                        }
-                                                    )
-                                                    HorizontalDivider()
-                                                    DropdownMenuItem(
-                                                        text = { Text(stringResource(R.string.hub_kick)) },
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            onKickOrBanPeer(peer.deviceId, false)
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text(stringResource(R.string.hub_ban), color = MaterialTheme.colorScheme.error) },
-                                                        onClick = {
-                                                            menuExpanded = false
-                                                            onKickOrBanPeer(peer.deviceId, true)
-                                                        }
+                                                    Icon(
+                                                        Icons.Rounded.MoreVert,
+                                                        contentDescription = stringResource(R.string.action_file_details),
+                                                        tint = MaterialTheme.colorScheme.primary
                                                     )
                                                 }
                                             }
@@ -1106,66 +1102,232 @@ fun GroupHubScreen(
                                 }
                             }
                         }
-                    }
 
-                    // 6. Encrypted Chat & Live Clipboard Sync
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    text = stringResource(R.string.hub_chat_title),
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                state.chatMessages.takeLast(8).forEach { msg ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = msg.senderName,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                            Text(
-                                                text = msg.text,
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                        }
-                                        IconButton(onClick = {
-                                            clipboard.setText(AnnotatedString(msg.text))
-                                        }) {
-                                            Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.hub_copy))
+                        // Live Shared Group Tray
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.hub_shared_tray, state.sharedItems.size),
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    if (state.sharedItems.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.hub_shared_tray_empty),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        state.sharedItems.forEach { item ->
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                CategoryBadge(category = item.category)
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = item.fileName,
+                                                        style = MaterialTheme.typography.bodyLarge,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = "${Formatters.formatBytes(item.fileSize)} • ${item.ownerDeviceName}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = { onDownloadItem(item, false) },
+                                                    modifier = Modifier.size(48.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Rounded.Download,
+                                                        contentDescription = stringResource(R.string.hub_download),
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = { onDownloadItem(item, true) },
+                                                    modifier = Modifier.size(48.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Rounded.Lock,
+                                                        contentDescription = stringResource(R.string.hub_download_vault),
+                                                        tint = MaterialTheme.colorScheme.tertiary
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedTextField(
-                                        value = chatInput,
-                                        onValueChange = { chatInput = it },
-                                        placeholder = { Text(stringResource(R.string.hub_chat_hint)) },
-                                        modifier = Modifier.weight(1f),
-                                        singleLine = true
+                            }
+                        }
+                    } else if (activeGroupTab == 1) {
+                        // Connected Devices & Host Permissions Controls
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.Devices, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(R.string.hub_members_title, state.peers.size),
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    state.peers.forEach { peer ->
+                                        var menuExpanded by remember { mutableStateOf(false) }
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "${peer.deviceName} (${if (peer.isHost) stringResource(R.string.hub_role_host) else stringResource(R.string.hub_role_member)})",
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                Text(
+                                                    text = "${peer.ipAddress} • ${peer.permission.name} • Key: ${peer.keyFingerprint}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            if (state.role == GroupRole.HOST && !peer.isHost) {
+                                                Box {
+                                                    TextButton(onClick = { menuExpanded = true }) {
+                                                        Text(stringResource(R.string.nav_settings))
+                                                    }
+                                                    DropdownMenu(
+                                                        expanded = menuExpanded,
+                                                        onDismissRequest = { menuExpanded = false }
+                                                    ) {
+                                                        DropdownMenuItem(
+                                                            text = { Text(stringResource(R.string.hub_perm_full)) },
+                                                            onClick = {
+                                                                menuExpanded = false
+                                                                onUpdatePeerPermission(peer.deviceId, PeerPermission.FULL_ACCESS)
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(stringResource(R.string.hub_perm_receive)) },
+                                                            onClick = {
+                                                                menuExpanded = false
+                                                                onUpdatePeerPermission(peer.deviceId, PeerPermission.RECEIVE_ONLY)
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(stringResource(R.string.hub_perm_send)) },
+                                                            onClick = {
+                                                                menuExpanded = false
+                                                                onUpdatePeerPermission(peer.deviceId, PeerPermission.SEND_ONLY)
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(stringResource(R.string.hub_perm_view)) },
+                                                            onClick = {
+                                                                menuExpanded = false
+                                                                onUpdatePeerPermission(peer.deviceId, PeerPermission.VIEW_ONLY)
+                                                            }
+                                                        )
+                                                        HorizontalDivider()
+                                                        DropdownMenuItem(
+                                                            text = { Text(stringResource(R.string.hub_kick)) },
+                                                            onClick = {
+                                                                menuExpanded = false
+                                                                onKickOrBanPeer(peer.deviceId, false)
+                                                            }
+                                                        )
+                                                        DropdownMenuItem(
+                                                            text = { Text(stringResource(R.string.hub_ban), color = MaterialTheme.colorScheme.error) },
+                                                            onClick = {
+                                                                menuExpanded = false
+                                                                onKickOrBanPeer(peer.deviceId, true)
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Encrypted Chat & Live Clipboard Sync
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.hub_chat_title),
+                                        style = MaterialTheme.typography.titleMedium
                                     )
-                                    Button(
-                                        onClick = {
-                                            onSendChat(chatInput)
-                                            chatInput = ""
-                                        },
-                                        modifier = Modifier.height(52.dp)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    state.chatMessages.takeLast(12).forEach { msg ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = msg.senderName,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Text(
+                                                    text = msg.text,
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                            }
+                                            IconButton(onClick = {
+                                                clipboard.setText(AnnotatedString(msg.text))
+                                            }) {
+                                                Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.hub_copy))
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Icon(Icons.Rounded.Send, contentDescription = stringResource(R.string.hub_send))
+                                        OutlinedTextField(
+                                            value = chatInput,
+                                            onValueChange = { chatInput = it },
+                                            placeholder = { Text(stringResource(R.string.hub_chat_hint)) },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true
+                                        )
+                                        Button(
+                                            onClick = {
+                                                onSendChat(chatInput)
+                                                chatInput = ""
+                                            },
+                                            modifier = Modifier.height(52.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Send, contentDescription = stringResource(R.string.hub_send))
+                                        }
                                     }
                                 }
                             }
@@ -1410,7 +1572,22 @@ fun GroupHubScreen(
         )
     }
 
-    // QR Code & Direct Info Dialog
+    // Received File Full Controls Bottom Sheet
+    selectedReceivedFile?.let { activeRf ->
+        ReceivedFileActionsSheet(
+            file = activeRf,
+            onDismiss = { selectedReceivedFile = null },
+            onOpenOrInstall = onOpenReceivedFile,
+            onMoveToVault = onMoveReceivedToVault,
+            onCopyOrMoveToFolder = onCopyOrMoveReceivedFile,
+            onRename = onRenameReceivedFile,
+            onShareExternal = onShareReceivedExternal,
+            onReshareToGroup = onReshareReceivedToGroup,
+            onDelete = onDeleteReceivedFile
+        )
+    }
+
+    // Large Zoomed QR Code & Direct Info Dialog (310dp)
     if (showQrDialog) {
         val qrPayload = state.directQrPayload.ifBlank {
             "nexodrop://${state.hostIp}:${state.hostPort}?name=${state.groupName}"
@@ -1424,7 +1601,7 @@ fun GroupHubScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    QrCodeCard(content = qrPayload, size = 190.dp)
+                    QrCodeCard(content = qrPayload, size = 310.dp)
                     Text(
                         text = "${state.hostIp}:${state.hostPort}",
                         style = MaterialTheme.typography.titleMedium
@@ -1444,7 +1621,7 @@ fun GroupHubScreen(
                             text = stringResource(R.string.hub_web_share_title),
                             style = MaterialTheme.typography.labelMedium
                         )
-                        QrCodeCard(content = state.webShareUrl, size = 140.dp)
+                        QrCodeCard(content = state.webShareUrl, size = 180.dp)
                         Text(
                             text = state.webShareUrl,
                             style = MaterialTheme.typography.labelSmall

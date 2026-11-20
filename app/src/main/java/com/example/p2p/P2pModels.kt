@@ -125,6 +125,23 @@ data class WifiDirectState(
     val statusMessage: String = ""
 )
 
+data class ReceivedGroupFile(
+    val id: String,
+    val itemId: String,
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val category: FileCategory,
+    val senderName: String,
+    val sha256: String,
+    val savedLocation: String,
+    val outputUri: Uri?,
+    val filePath: String?,
+    val isInVault: Boolean,
+    val vaultItemId: Long? = null,
+    val receivedAt: Long = System.currentTimeMillis()
+)
+
 data class GroupWorkspaceState(
     val phase: ConnectionPhase = ConnectionPhase.IDLE,
     val role: GroupRole = GroupRole.NONE,
@@ -136,6 +153,8 @@ data class GroupWorkspaceState(
     val groupPin: String = "",
     val keyFingerprint: String = "",
     val autoApprove: Boolean = false,
+    val autoReceiveFiles: Boolean = true,
+    val connectionStep: Int = 0,
     val webShareUrl: String = "",
     val directQrPayload: String = "",
     val localNetworkEnabled: Boolean = false,
@@ -143,6 +162,7 @@ data class GroupWorkspaceState(
     val peers: List<GroupPeer> = emptyList(),
     val pendingRequests: List<PendingJoinRequest> = emptyList(),
     val sharedItems: List<SharedGroupItem> = emptyList(),
+    val receivedFiles: List<ReceivedGroupFile> = emptyList(),
     val activeTransfers: List<ActiveTransfer> = emptyList(),
     val chatMessages: List<GroupChatMessage> = emptyList(),
     val discoveredGroups: List<DiscoveredGroup> = emptyList(),
