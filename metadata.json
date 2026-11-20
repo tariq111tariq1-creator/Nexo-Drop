@@ -1,0 +1,6 @@
+{
+  "name": "NexoDrop",
+  "description": "Encrypted offline peer-to-peer file and app sharing with group sync, private vault, and multi-language support",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

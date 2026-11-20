@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NexoDrop</string>
+
+    <!-- Navigation -->
+    <string name="nav_group">Group</string>
+    <string name="nav_explorer">Explorer</string>
+    <string name="nav_vault">Vault</string>
+    <string name="nav_reports">Reports</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Onboarding & Permissions -->
+    <string name="onboarding_title">Encrypted Offline Sharing</string>
+    <string name="onboarding_subtitle">Transfer any file or installed app directly between devices with zero internet, zero servers, and AES-256-GCM encryption.</string>
+    <string name="onboarding_step_permissions">1. Grant Connectivity &amp; Notification Permissions</string>
+    <string name="onboarding_step_storage">2. Choose Where to Save Received Files</string>
+    <string name="onboarding_step_group">3. Create a Group or Join Nearby Devices</string>
+    <string name="btn_grant_permissions">Grant Required Permissions</string>
+    <string name="btn_get_started">Continue to NexoDrop</string>
+    <string name="btn_skip">Continue</string>
+
+    <!-- Group Hub -->
+    <string name="hub_title">Group Radar</string>
+    <string name="hub_device_name_label">This Device: %1$s</string>
+    <string name="hub_create_group">Create Group</string>
+    <string name="hub_join_manual">Join via IP / PIN</string>
+    <string name="hub_scan_nearby">Scan Nearby</string>
+    <string name="hub_scanning">Scanning local network &amp; Wi-Fi Direct…</string>
+    <string name="hub_no_groups">No nearby groups found yet</string>
+    <string name="hub_no_groups_hint">Ensure devices are on the same Wi-Fi, mobile hotspot, or start a Wi-Fi Direct group.</string>
+    <string name="hub_wifi_direct_create">Start Wi-Fi Direct Group</string>
+    <string name="hub_wifi_direct_discover">Discover Wi-Fi Direct</string>
+    <string name="hub_wifi_direct_active">Wi-Fi Direct Active: %1$s</string>
+    <string name="hub_wifi_direct_pass">Passphrase: %1$s</string>
+    <string name="hub_join">Join</string>
+    <string name="hub_leave_group">Leave Group</string>
+    <string name="hub_close_group">Close Group</string>
+    <string name="hub_group_pin_label">Group PIN (Optional)</string>
+    <string name="hub_group_name_label">Group Name</string>
+    <string name="hub_auto_approve">Auto-approve join requests</string>
+    <string name="hub_enable_web_share">Enable Browser Web Share</string>
+    <string name="hub_host_ip_label">Host IP Address</string>
+    <string name="hub_host_port_label">Port</string>
+    <string name="hub_enter_pin">Enter PIN</string>
+    <string name="hub_connect">Connect</string>
+    <string name="hub_cancel">Cancel</string>
+    <string name="hub_confirm">Confirm</string>
+    <string name="hub_connected_host">Hosting: %1$s</string>
+    <string name="hub_connected_member">Connected to: %1$s</string>
+    <string name="hub_e2ee_verified">ECDH + AES-256-GCM • Key: %1$s</string>
+    <string name="hub_pending_requests">Pending Join Requests (%1$d)</string>
+    <string name="hub_approve">Approve</string>
+    <string name="hub_reject">Reject</string>
+    <string name="hub_members_title">Connected Devices (%1$d)</string>
+    <string name="hub_role_host">Host</string>
+    <string name="hub_role_member">Member</string>
+    <string name="hub_perm_full">Send &amp; Receive</string>
+    <string name="hub_perm_receive">Receive Only</string>
+    <string name="hub_perm_send">Send Only</string>
+    <string name="hub_perm_view">View Only</string>
+    <string name="hub_kick">Kick</string>
+    <string name="hub_ban">Ban</string>
+    <string name="hub_shared_tray">Live Shared Files (%1$d)</string>
+    <string name="hub_shared_tray_empty">No files shared in this group yet. Add files or apps from Explorer.</string>
+    <string name="hub_add_files">Add Files</string>
+    <string name="hub_download">Download</string>
+    <string name="hub_download_vault">Save to Vault</string>
+    <string name="hub_download_all">Download All</string>
+    <string name="hub_active_transfers">Active Transfers (%1$d)</string>
+    <string name="hub_chat_title">Encrypted Chat &amp; Clipboard</string>
+    <string name="hub_chat_hint">Send encrypted text or paste link…</string>
+    <string name="hub_send">Send</string>
+    <string name="hub_copy">Copy</string>
+    <string name="hub_web_share_title">Browser Web Share (Any OS)</string>
+    <string name="hub_web_share_url">Open in any browser: %1$s</string>
+    <string name="hub_qr_title">Group QR &amp; Direct Info</string>
+    <string name="hub_waiting_approval">Waiting for host approval…</string>
+
+    <!-- Explorer & Search -->
+    <string name="explorer_title">Files &amp; Apps</string>
+    <string name="explorer_tab_apps">Installed Apps</string>
+    <string name="explorer_tab_media">Device Files</string>
+    <string name="explorer_tab_folders">Folders</string>
+    <string name="explorer_search_hint">Search files, apps, extensions, sizes…</string>
+    <string name="explorer_filter_all">All</string>
+    <string name="explorer_filter_images">Images</string>
+    <string name="explorer_filter_video">Video</string>
+    <string name="explorer_filter_audio">Audio</string>
+    <string name="explorer_filter_docs">Documents</string>
+    <string name="explorer_filter_archives">Archives &amp; APK</string>
+    <string name="explorer_pick_photos">Photo Picker</string>
+    <string name="explorer_pick_files">System File Picker</string>
+    <string name="explorer_phone_clone">Select All User Apps</string>
+    <string name="explorer_selected_count">%1$d selected</string>
+    <string name="explorer_share_to_group">Share to Group</string>
+    <string name="explorer_hide_in_vault">Hide in Vault</string>
+    <string name="explorer_hide_app">Hide App</string>
+    <string name="explorer_show_system_apps">Show System Apps</string>
+    <string name="explorer_sort_name">Name</string>
+    <string name="explorer_sort_size">Size</string>
+    <string name="explorer_sort_date">Date</string>
+    <string name="explorer_all_files_needed">Grant All Files Access to browse raw internal &amp; SD card folders directly, or use System File Picker above.</string>
+    <string name="explorer_grant_all_files">Grant All Files Access</string>
+    <string name="explorer_create_nomedia">Hide Folder from Gallery (.nomedia)</string>
+    <string name="explorer_empty">No matching files or apps found</string>
+    <string name="explorer_split_apk_badge">Split APK</string>
+
+    <!-- Private Vault -->
+    <string name="vault_title">Encrypted Private Vault</string>
+    <string name="vault_locked_title">Vault is Locked</string>
+    <string name="vault_setup_pin_title">Set 6-Digit Vault PIN</string>
+    <string name="vault_setup_pin_desc">Files and hidden apps in your Vault are AES-256 encrypted using Android Keystore and invisible to Gallery or file managers.</string>
+    <string name="vault_enter_pin">Enter 6-digit PIN</string>
+    <string name="vault_confirm_pin">Confirm PIN</string>
+    <string name="vault_unlock">Unlock</string>
+    <string name="vault_unlock_biometric">Unlock with Biometrics</string>
+    <string name="vault_pin_mismatch">PINs do not match or length is not 6 digits</string>
+    <string name="vault_wrong_pin">Incorrect PIN</string>
+    <string name="vault_lock_now">Lock Vault</string>
+    <string name="vault_import_file">Hide File in Vault</string>
+    <string name="vault_hidden_files">Hidden Encrypted Files (%1$d)</string>
+    <string name="vault_hidden_apps">Hidden Apps (%1$d)</string>
+    <string name="vault_export">Restore to Storage</string>
+    <string name="vault_open">Open Decrypted</string>
+    <string name="vault_install_apk">Install Package</string>
+    <string name="vault_unhide_app">Unhide App</string>
+    <string name="vault_delete">Delete</string>
+    <string name="vault_empty">Your private vault is empty</string>
+
+    <!-- Reports & History -->
+    <string name="reports_title">Transfer Reports</string>
+    <string name="reports_total_sent">Total Sent</string>
+    <string name="reports_total_received">Total Received</string>
+    <string name="reports_avg_speed">Avg Speed</string>
+    <string name="reports_success_rate">Success Rate</string>
+    <string name="reports_export_csv">Export CSV</string>
+    <string name="reports_export_pdf">Export PDF</string>
+    <string name="reports_clear">Clear History</string>
+    <string name="reports_filter_all">All</string>
+    <string name="reports_filter_sent">Sent</string>
+    <string name="reports_filter_received">Received</string>
+    <string name="reports_filter_failed">Failed</string>
+    <string name="reports_filter_vault">Vault</string>
+    <string name="reports_empty">No completed transfers recorded yet</string>
+    <string name="reports_chart_title">Traffic by File Category</string>
+    <string name="reports_exported_toast">Report exported and ready to share</string>
+
+    <!-- Settings & Permissions -->
+    <string name="settings_title">Settings &amp; Permissions</string>
+    <string name="settings_device_section">Device Identity</string>
+    <string name="settings_device_name">Device Display Name</string>
+    <string name="settings_language_section">Language (10 Languages)</string>
+    <string name="settings_language_label">App Language</string>
+    <string name="settings_storage_section">Save Location</string>
+    <string name="settings_save_mode_downloads">Public Downloads/NexoDrop</string>
+    <string name="settings_save_mode_custom">Custom Folder (Internal / SD Card)</string>
+    <string name="settings_save_mode_smart">Smart Category Folders</string>
+    <string name="settings_save_mode_vault">Always Save to Private Vault</string>
+    <string name="settings_pick_folder">Pick Internal or SD Card Folder</string>
+    <string name="settings_current_folder">Folder: %1$s</string>
+    <string name="settings_theme_section">Appearance &amp; Dark Mode</string>
+    <string name="settings_theme_system">System Default</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_amoled">AMOLED Pure Black</string>
+    <string name="settings_security_section">Privacy &amp; Security</string>
+    <string name="settings_strip_exif">Strip EXIF metadata from sent photos</string>
+    <string name="settings_biometric_lock">Use Biometrics to unlock Vault</string>
+    <string name="settings_notifications_section">Smart Notifications</string>
+    <string name="settings_silent_notif">Mute group chat &amp; request sounds</string>
+    <string name="settings_complete_only_notif">Notify only when batch completes</string>
+    <string name="settings_permissions_section">System Permissions Center</string>
+    <string name="perm_nearby">Nearby Wi-Fi &amp; Discovery</string>
+    <string name="perm_bluetooth">Bluetooth Discovery</string>
+    <string name="perm_notifications">Transfer &amp; Group Notifications</string>
+    <string name="perm_all_files">Full Storage Access (Internal &amp; SD)</string>
+    <string name="perm_install_apk">Install Received Apps (APK)</string>
+    <string name="perm_granted">Granted</string>
+    <string name="perm_missing">Grant</string>
+
+    <!-- Notifications & Status -->
+    <string name="notif_channel_transfer">Active Transfers</string>
+    <string name="notif_channel_alerts">Group &amp; Security Alerts</string>
+    <string name="notif_hosting_title">NexoDrop Group Active: %1$s</string>
+    <string name="notif_hosting_body">Listening on port %1$d • %2$d devices connected</string>
+    <string name="notif_transfer_title">Transferring %1$s</string>
+    <string name="notif_join_request_title">Join Request: %1$s</string>
+    <string name="notif_join_request_body">Tap to review or approve device connection</string>
+    <string name="notif_file_received">Received %1$s (%2$s)</string>
+    <string name="status_completed">Completed</string>
+    <string name="status_failed">Failed</string>
+    <string name="status_cancelled">Cancelled</string>
+    <string name="status_in_progress">Transferring</string>
+    <string name="msg_added_to_group">Added %1$d item(s) to Shared Group Tray</string>
+    <string name="msg_saved_to_vault">Encrypted and saved to Private Vault</string>
+    <string name="msg_nomedia_created">.nomedia created — hidden from Gallery</string>
+
+    <!-- Direct P2P & QR Pairing -->
+    <string name="hub_direct_mode_badge">Direct Device-to-Device (No Router)</string>
+    <string name="hub_secondary_lan_toggle">Secondary: Local Wi-Fi Network (LAN)</string>
+    <string name="hub_scan_qr">Scan QR to Join</string>
+    <string name="hub_scan_qr_hint">Point camera at Host QR code for instant direct Wi-Fi pairing</string>
+    <string name="hub_qr_invalid">Unrecognized NexoDrop QR code</string>
+    <string name="hub_nearby_direct_title">Nearby Direct Devices (%1$d)</string>
+    <string name="hub_direct_hotspot_fallback">Use Direct Hotspot (Fallback)</string>
+    <string name="hub_direct_hotspot_active">Direct Hotspot Ready: %1$s</string>
+    <string name="hub_direct_credentials_hint">Scan this QR on the other phone or connect from Nearby Direct Devices</string>
+    <string name="hub_prereq_wifi_off">Wi-Fi is OFF. Turn ON Wi-Fi for direct device connection.</string>
+    <string name="hub_prereq_location_off">System Location is OFF. Android requires Location ON for Wi-Fi Direct.</string>
+    <string name="hub_prereq_perms_missing">Grant Nearby Wi-Fi &amp; Location permissions to discover and connect directly.</string>
+    <string name="hub_btn_turn_on_wifi">Turn On Wi-Fi</string>
+    <string name="hub_btn_turn_on_location">Enable Location</string>
+    <string name="perm_location">Location (Required for Wi-Fi Direct)</string>
+    <string name="perm_camera">Camera (QR Direct Pairing)</string>
+    <string name="perm_camera_needed">Camera permission is needed to scan Host QR codes for direct pairing.</string>
+    <string name="perm_wifi_service">Wi-Fi Radio Enabled</string>
+    <string name="perm_location_service">System Location Enabled</string>
+</resources>

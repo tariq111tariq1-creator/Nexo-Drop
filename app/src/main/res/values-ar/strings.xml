@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NexoDrop</string>
+
+    <!-- Navigation -->
+    <string name="nav_group">المجموعة</string>
+    <string name="nav_explorer">المستعرض</string>
+    <string name="nav_vault">الخزنة</string>
+    <string name="nav_reports">التقارير</string>
+    <string name="nav_settings">الإعدادات</string>
+
+    <!-- Onboarding & Permissions -->
+    <string name="onboarding_title">مشاركة مشفرة بدون إنترنت</string>
+    <string name="onboarding_subtitle">انقل جميع أنواع الملفات والتطبيقات المثبتة مباشرة بين الأجهزة بدون خادم وسيط، وبتشفير AES-256-GCM كامل.</string>
+    <string name="onboarding_step_permissions">١. منح أذونات الاتصال والتنبيهات</string>
+    <string name="onboarding_step_storage">٢. اختيار مكان حفظ الملفات المستلمة</string>
+    <string name="onboarding_step_group">٣. إنشاء مجموعة أو الانضمام للأجهزة القريبة</string>
+    <string name="btn_grant_permissions">منح الأذونات المطلوبة</string>
+    <string name="btn_get_started">البدء باستخدام NexoDrop</string>
+    <string name="btn_skip">متابعة</string>
+
+    <!-- Group Hub -->
+    <string name="hub_title">رادار المجموعة</string>
+    <string name="hub_device_name_label">هذا الجهاز: %1$s</string>
+    <string name="hub_create_group">إنشاء مجموعة</string>
+    <string name="hub_join_manual">انضمام عبر IP / PIN</string>
+    <string name="hub_scan_nearby">بحث قريب</string>
+    <string name="hub_scanning">جارٍ البحث في الشبكة المحلية و Wi-Fi Direct…</string>
+    <string name="hub_no_groups">لم يتم العثور على مجموعات قريبة بعد</string>
+    <string name="hub_no_groups_hint">تأكد من اتصال الأجهزة بنفس شبكة Wi-Fi أو نقطة الاتصال، أو ابدأ مجموعة Wi-Fi Direct.</string>
+    <string name="hub_wifi_direct_create">تشغيل مجموعة Wi-Fi Direct</string>
+    <string name="hub_wifi_direct_discover">اكتشاف Wi-Fi Direct</string>
+    <string name="hub_wifi_direct_active">Wi-Fi Direct نشط: %1$s</string>
+    <string name="hub_wifi_direct_pass">كلمة المرور: %1$s</string>
+    <string name="hub_join">انضمام</string>
+    <string name="hub_leave_group">مغادرة المجموعة</string>
+    <string name="hub_close_group">إغلاق المجموعة</string>
+    <string name="hub_group_pin_label">رمز PIN للمجموعة (اختياري)</string>
+    <string name="hub_group_name_label">اسم المجموعة</string>
+    <string name="hub_auto_approve">قبول طلبات الانضمام تلقائياً</string>
+    <string name="hub_enable_web_share">تفعيل المشاركة عبر المتصفح</string>
+    <string name="hub_host_ip_label">عنوان IP للمضيف</string>
+    <string name="hub_host_port_label">المنفذ</string>
+    <string name="hub_enter_pin">أدخل رمز PIN</string>
+    <string name="hub_connect">اتصال</string>
+    <string name="hub_cancel">إلغاء</string>
+    <string name="hub_confirm">تأكيد</string>
+    <string name="hub_connected_host">استضافة: %1$s</string>
+    <string name="hub_connected_member">متصل بـ: %1$s</string>
+    <string name="hub_e2ee_verified">ECDH + AES-256-GCM • المفتاح: %1$s</string>
+    <string name="hub_pending_requests">طلبات الانضمام المعلقة (%1$d)</string>
+    <string name="hub_approve">قبول</string>
+    <string name="hub_reject">رفض</string>
+    <string name="hub_members_title">الأجهزة المتصلة (%1$d)</string>
+    <string name="hub_role_host">المضيف</string>
+    <string name="hub_role_member">عضو</string>
+    <string name="hub_perm_full">إرسال واستقبال</string>
+    <string name="hub_perm_receive">استقبال فقط</string>
+    <string name="hub_perm_send">إرسال فقط</string>
+    <string name="hub_perm_view">عرض فقط</string>
+    <string name="hub_kick">طرد</string>
+    <string name="hub_ban">حظر</string>
+    <string name="hub_shared_tray">الملفات المتزامنة (%1$d)</string>
+    <string name="hub_shared_tray_empty">لا توجد ملفات مشتركة بعد. أضف ملفات أو تطبيقات من المستعرض.</string>
+    <string name="hub_add_files">إضافة ملفات</string>
+    <string name="hub_download">تنزيل</string>
+    <string name="hub_download_vault">حفظ في الخزنة</string>
+    <string name="hub_download_all">تنزيل الكل</string>
+    <string name="hub_active_transfers">عمليات النقل الجارية (%1$d)</string>
+    <string name="hub_chat_title">الدردشة والحافظة المشفرة</string>
+    <string name="hub_chat_hint">أرسل نصاً مشفراً أو رابطاً…</string>
+    <string name="hub_send">إرسال</string>
+    <string name="hub_copy">نسخ</string>
+    <string name="hub_web_share_title">المشاركة عبر المتصفح (أي نظام)</string>
+    <string name="hub_web_share_url">افتح في أي متصفح: %1$s</string>
+    <string name="hub_qr_title">رمز QR ومعلومات الاتصال المباشر</string>
+    <string name="hub_waiting_approval">بانتظار موافقة منشئ المجموعة…</string>
+
+    <!-- Explorer & Search -->
+    <string name="explorer_title">الملفات والتطبيقات</string>
+    <string name="explorer_tab_apps">التطبيقات المثبتة</string>
+    <string name="explorer_tab_media">ملفات الجهاز</string>
+    <string name="explorer_tab_folders">المجلدات</string>
+    <string name="explorer_search_hint">ابحث عن ملف، تطبيق، صيغة، حجم…</string>
+    <string name="explorer_filter_all">الكل</string>
+    <string name="explorer_filter_images">صور</string>
+    <string name="explorer_filter_video">فيديو</string>
+    <string name="explorer_filter_audio">صوت</string>
+    <string name="explorer_filter_docs">مستندات</string>
+    <string name="explorer_filter_archives">أرشيف و APK</string>
+    <string name="explorer_pick_photos">منتقي الصور والفيديو</string>
+    <string name="explorer_pick_files">منتقي ملفات النظام</string>
+    <string name="explorer_phone_clone">تحديد جميع تطبيقات المستخدم</string>
+    <string name="explorer_selected_count">تم تحديد %1$d</string>
+    <string name="explorer_share_to_group">مشاركة للمجموعة</string>
+    <string name="explorer_hide_in_vault">إخفاء في الخزنة</string>
+    <string name="explorer_hide_app">إخفاء التطبيق</string>
+    <string name="explorer_show_system_apps">إظهار تطبيقات النظام</string>
+    <string name="explorer_sort_name">الاسم</string>
+    <string name="explorer_sort_size">الحجم</string>
+    <string name="explorer_sort_date">التاريخ</string>
+    <string name="explorer_all_files_needed">امنح صلاحية الوصول لكافة الملفات لتصفح الذاكرة الداخلية و SD مباشرة، أو استخدم منتقي الملفات أعلاه.</string>
+    <string name="explorer_grant_all_files">منح صلاحية كافة الملفات</string>
+    <string name="explorer_create_nomedia">إخفاء المجلد عن المعرض (.nomedia)</string>
+    <string name="explorer_empty">لا توجد ملفات أو تطبيقات مطابقة</string>
+    <string name="explorer_split_apk_badge">حزمة مقسمة</string>
+
+    <!-- Private Vault -->
+    <string name="vault_title">الخزنة الخاصة المشفرة</string>
+    <string name="vault_locked_title">الخزنة مقفلة</string>
+    <string name="vault_setup_pin_title">تعيين رمز PIN من 6 أرقام</string>
+    <string name="vault_setup_pin_desc">تُشفَّر الملفات والتطبيقات المخفية في الخزنة بتقنية AES-256 عبر Android Keystore وتختفي تماماً عن الاستوديو ومديري الملفات.</string>
+    <string name="vault_enter_pin">أدخل رمز PIN المكون من 6 أرقام</string>
+    <string name="vault_confirm_pin">تأكيد رمز PIN</string>
+    <string name="vault_unlock">فتح القفل</string>
+    <string name="vault_unlock_biometric">فتح بالبصمة</string>
+    <string name="vault_pin_mismatch">الرمزان غير متطابقين أو أقل من 6 أرقام</string>
+    <string name="vault_wrong_pin">رمز PIN غير صحيح</string>
+    <string name="vault_lock_now">قفل الخزنة</string>
+    <string name="vault_import_file">إخفاء ملف في الخزنة</string>
+    <string name="vault_hidden_files">الملفات المخفية المشفرة (%1$d)</string>
+    <string name="vault_hidden_apps">التطبيقات المخفية (%1$d)</string>
+    <string name="vault_export">استعادة للتخزين</string>
+    <string name="vault_open">فتح وفك التشفير</string>
+    <string name="vault_install_apk">تثبيت الحزمة</string>
+    <string name="vault_unhide_app">إظهار التطبيق</string>
+    <string name="vault_delete">حذف نهائي</string>
+    <string name="vault_empty">خزنتك الخاصة فارغة حالياً</string>
+
+    <!-- Reports & History -->
+    <string name="reports_title">تقارير وسجل النقل</string>
+    <string name="reports_total_sent">إجمالي المُرسل</string>
+    <string name="reports_total_received">إجمالي المُستلم</string>
+    <string name="reports_avg_speed">متوسط السرعة</string>
+    <string name="reports_success_rate">نسبة النجاح</string>
+    <string name="reports_export_csv">تصدير CSV</string>
+    <string name="reports_export_pdf">تصدير PDF</string>
+    <string name="reports_clear">مسح السجل</string>
+    <string name="reports_filter_all">الكل</string>
+    <string name="reports_filter_sent">صادر</string>
+    <string name="reports_filter_received">وارد</string>
+    <string name="reports_filter_failed">فاشل</string>
+    <string name="reports_filter_vault">الخزنة</string>
+    <string name="reports_empty">لا توجد عمليات نقل مسجلة بعد</string>
+    <string name="reports_chart_title">توزيع البيانات حسب النوع</string>
+    <string name="reports_exported_toast">تم تصدير التقرير وجاهز للمشاركة</string>
+
+    <!-- Settings & Permissions -->
+    <string name="settings_title">الإعدادات والأذونات</string>
+    <string name="settings_device_section">هوية الجهاز</string>
+    <string name="settings_device_name">اسم الجهاز الظاهر</string>
+    <string name="settings_language_section">اللغة (10 لغات)</string>
+    <string name="settings_language_label">لغة التطبيق</string>
+    <string name="settings_storage_section">مكان حفظ الملفات المستلمة</string>
+    <string name="settings_save_mode_downloads">مجلد التنزيلات العام (Downloads/NexoDrop)</string>
+    <string name="settings_save_mode_custom">مجلد مخصص (الذاكرة الداخلية أو SD Card)</string>
+    <string name="settings_save_mode_smart">تصنيف تلقائي ذكي في المجلدات</string>
+    <string name="settings_save_mode_vault">حفظ مباشر في الخزنة الخاصة المشفرة</string>
+    <string name="settings_pick_folder">اختيار مجلد (ذاكرة داخلية / SD)</string>
+    <string name="settings_current_folder">المجلد الحالي: %1$s</string>
+    <string name="settings_theme_section">المظهر والوضع الليلي</string>
+    <string name="settings_theme_system">حسب النظام</string>
+    <string name="settings_theme_light">نهاري</string>
+    <string name="settings_theme_dark">ليلي</string>
+    <string name="settings_theme_amoled">ليلي أسود كامل (AMOLED)</string>
+    <string name="settings_security_section">الأمان والخصوصية</string>
+    <string name="settings_strip_exif">مسح بيانات EXIF من الصور المرسلة</string>
+    <string name="settings_biometric_lock">استخدام البصمة لفتح الخزنة</string>
+    <string name="settings_notifications_section">نظام التنبيهات الذكي</string>
+    <string name="settings_silent_notif">كتم أصوات الدردشة وطلبات المجموعة</string>
+    <string name="settings_complete_only_notif">التنبيه عند اكتمال الدفعة فقط</string>
+    <string name="settings_permissions_section">مركز أذونات النظام</string>
+    <string name="perm_nearby">أجهزة Wi-Fi القريبة والاكتشاف</string>
+    <string name="perm_bluetooth">اكتشاف البلوتوث</string>
+    <string name="perm_notifications">تنبيهات النقل والمجموعة</string>
+    <string name="perm_all_files">صلاحية الوصول الكامل للملفات (داخلي و SD)</string>
+    <string name="perm_install_apk">تثبيت التطبيقات المستلمة (APK)</string>
+    <string name="perm_granted">ممنوح</string>
+    <string name="perm_missing">منح الإذن</string>
+
+    <!-- Notifications & Status -->
+    <string name="notif_channel_transfer">عمليات النقل النشطة</string>
+    <string name="notif_channel_alerts">تنبيهات المجموعة والأمان</string>
+    <string name="notif_hosting_title">مجموعة NexoDrop نشطة: %1$s</string>
+    <string name="notif_hosting_body">الاستماع على المنفذ %1$d • %2$d أجهزة متصلة</string>
+    <string name="notif_transfer_title">جارٍ نقل %1$s</string>
+    <string name="notif_join_request_title">طلب انضمام: %1$s</string>
+    <string name="notif_join_request_body">اضغط لمراجعة أو قبول الجهاز</string>
+    <string name="notif_file_received">تم استلام %1$s (%2$s)</string>
+    <string name="status_completed">مكتمل</string>
+    <string name="status_failed">فاشل</string>
+    <string name="status_cancelled">ملغى</string>
+    <string name="status_in_progress">قيد النقل</string>
+    <string name="msg_added_to_group">تمت إضافة %1$d عنصر إلى قائمة المجموعة</string>
+    <string name="msg_saved_to_vault">تم التشفير والحفظ في الخزنة الخاصة</string>
+    <string name="msg_nomedia_created">تم إنشاء .nomedia لإخفاء المجلد عن المعرض</string>
+
+    <!-- Direct P2P & QR Pairing -->
+    <string name="hub_direct_mode_badge">اتصال مباشر بين الأجهزة (بدون راوتر)</string>
+    <string name="hub_secondary_lan_toggle">ثانوي: البحث عبر الشبكة المحلية (LAN)</string>
+    <string name="hub_scan_qr">مسح QR للاتصال</string>
+    <string name="hub_scan_qr_hint">وجّه الكاميرا نحو رمز QR في الجهاز المضيف للاتصال المباشر فوراً</string>
+    <string name="hub_qr_invalid">رمز QR غير صالح لتطبيق NexoDrop</string>
+    <string name="hub_nearby_direct_title">أجهزة قريبة للاتصال المباشر (%1$d)</string>
+    <string name="hub_direct_hotspot_fallback">تفعيل نقطة اتصال مباشرة (بديل)</string>
+    <string name="hub_direct_hotspot_active">نقطة الاتصال المباشرة جاهزة: %1$s</string>
+    <string name="hub_direct_credentials_hint">امسح رمز QR من الهاتف الآخر أو اتصل مباشرة من قائمة الأجهزة القريبة</string>
+    <string name="hub_prereq_wifi_off">الواي فاي مغلق. قم بتشغيل Wi-Fi ليتم التوصيل المباشر بين الأجهزة.</string>
+    <string name="hub_prereq_location_off">خدمة الموقع (GPS) مغلقة. يتطلب أندرويد تفعيلها لاكتشاف Wi-Fi Direct.</string>
+    <string name="hub_prereq_perms_missing">يرجى منح أذونات الأجهزة القريبة والموقع ليتم التوصيل المباشر بنجاح.</string>
+    <string name="hub_btn_turn_on_wifi">تشغيل Wi-Fi</string>
+    <string name="hub_btn_turn_on_location">تفعيل الموقع</string>
+    <string name="perm_location">الموقع الجغرافي (مطلوب لـ Wi-Fi Direct)</string>
+    <string name="perm_camera">الكاميرا (لمسح رمز QR المباشر)</string>
+    <string name="perm_camera_needed">إذن الكاميرا مطلوب لمسح رمز QR والاتصال المباشر.</string>
+    <string name="perm_wifi_service">تشغيل Wi-Fi بالنظام</string>
+    <string name="perm_location_service">تفعيل خدمة الموقع بالنظام</string>
+</resources>
