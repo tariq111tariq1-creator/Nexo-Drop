@@ -109,7 +109,13 @@ fun ReceivedFileActionsSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                CategoryBadge(category = file.category)
+                MediaThumbnailBadge(
+                    uri = file.outputUri,
+                    filePath = file.filePath,
+                    fileName = file.fileName,
+                    category = file.category,
+                    size = 48.dp
+                )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(

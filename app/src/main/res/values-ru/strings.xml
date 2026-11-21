@@ -253,4 +253,25 @@
     <string name="msg_file_deleted">Файл удалён</string>
     <string name="msg_file_copied">Файл скопирован</string>
     <string name="msg_file_moved">Файл перемещён</string>
+    <string name="settings_cache_title">Временный кэш передачи</string>
+    <string name="settings_clear_cache_btn">Очистить</string>
+    <string name="settings_cache_cleared">Освобождено %1$s</string>
+    <string name="explorer_view_list">Список</string>
+    <string name="explorer_view_grid">Сетка</string>
+    <string name="explorer_select_all">Выбрать все</string>
+    <string name="explorer_storage_free_total">Свободно: %1$s / %2$s</string>
+    <string name="explorer_send_folder">Отправить всю папку</string>
+    <string name="hub_pending_share_title">Готово к отправке: %1$d</string>
+    <string name="hub_pending_share_create_send">Создать группу и отправить</string>
+    <string name="hub_stats_sent_recv">Отпр.: %1$d • Получ.: %2$d</string>
+    <string name="hub_qr_collapse">Скрыть QR</string>
+    <string name="hub_qr_expand">Показать QR</string>
+    <string name="hub_transfer_pause">Пауза</string>
+    <string name="hub_transfer_resume">Продолжить</string>
+    <string name="hub_transfer_paused">Пауза</string>
+    <string name="hub_sent_files_title">Отправленные (%1$d)</string>
+    <string name="hub_delivered_to">Получено: %1$s</string>
+    <string name="hub_sent_waiting">Отправлено — ожидание</string>
+    <string name="hub_resend">Повторить</string>
+    <string name="hub_paste_send">Вставить и отправить</string>
 </resources>

@@ -2,6 +2,8 @@ package com.example
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -95,22 +97,49 @@ class MainActivity : FragmentActivity() {
         super.attachBaseContext(LocaleHelper.wrapContext(newBase, langCode))
     }
 
-    private fun handleNotificationIntent(intent: Intent?) {
-        if (intent?.action == TransferForegroundService.ACTION_OPEN_JOIN_REQUESTS) {
-            viewModel.triggerFocusJoinApproval()
+    private fun handleIncomingIntent(intent: Intent?) {
+        when (intent?.action) {
+            TransferForegroundService.ACTION_OPEN_JOIN_REQUESTS -> {
+                viewModel.triggerFocusJoinApproval()
+            }
+            Intent.ACTION_SEND -> {
+                val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+                if (uri != null || !text.isNullOrBlank()) {
+                    viewModel.handleExternalShare(listOfNotNull(uri), text)
+                    viewModel.triggerOpenGroupTab()
+                }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris: List<Uri> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+                }
+                if (uris.isNotEmpty()) {
+                    viewModel.handleExternalShare(uris, null)
+                    viewModel.triggerOpenGroupTab()
+                }
+            }
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleNotificationIntent(intent)
+        handleIncomingIntent(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleNotificationIntent(intent)
+        handleIncomingIntent(intent)
 
         setContent {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -127,6 +156,10 @@ class MainActivity : FragmentActivity() {
             val permissions by viewModel.permissionSnapshot.collectAsStateWithLifecycle()
             val backupState by viewModel.backupState.collectAsStateWithLifecycle()
             val joinApprovalFocusTick by viewModel.joinApprovalFocusTick.collectAsStateWithLifecycle()
+            val openGroupTabTick by viewModel.openGroupTabTick.collectAsStateWithLifecycle()
+            val pendingExternalShareUris by viewModel.pendingExternalShareUris.collectAsStateWithLifecycle()
+            val storageSpaceInfo by viewModel.storageSpaceInfo.collectAsStateWithLifecycle()
+            val tempCacheBytes by viewModel.tempCacheBytes.collectAsStateWithLifecycle()
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -176,7 +209,11 @@ class MainActivity : FragmentActivity() {
                             vaultUnlocked = vaultUnlocked,
                             permissions = permissions,
                             backupState = backupState,
-                            joinApprovalFocusTick = joinApprovalFocusTick
+                            joinApprovalFocusTick = joinApprovalFocusTick,
+                            openGroupTabTick = openGroupTabTick,
+                            pendingExternalShareUris = pendingExternalShareUris,
+                            storageSpaceInfo = storageSpaceInfo,
+                            tempCacheBytes = tempCacheBytes
                         )
                     }
                 }
@@ -208,7 +245,11 @@ private fun MainAdaptiveScaffold(
     vaultUnlocked: Boolean,
     permissions: com.example.util.PermissionSnapshot,
     backupState: BackupUiState,
-    joinApprovalFocusTick: Int
+    joinApprovalFocusTick: Int,
+    openGroupTabTick: Int,
+    pendingExternalShareUris: List<Uri>,
+    storageSpaceInfo: com.example.data.StorageSpaceInfo?,
+    tempCacheBytes: Long
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -234,8 +275,8 @@ private fun MainAdaptiveScaffold(
         }
     }
 
-    LaunchedEffect(joinApprovalFocusTick) {
-        if (joinApprovalFocusTick > 0) {
+    LaunchedEffect(joinApprovalFocusTick, openGroupTabTick) {
+        if (joinApprovalFocusTick > 0 || openGroupTabTick > 0) {
             navigateTab(ROUTE_GROUP)
         }
     }
@@ -321,6 +362,10 @@ private fun MainAdaptiveScaffold(
                                 permissions = permissions,
                                 isWideScreen = useRail,
                                 joinApprovalFocusTick = joinApprovalFocusTick,
+                                pendingExternalShareCount = pendingExternalShareUris.size,
+                                onSendPendingShare = { viewModel.sendPendingShareToGroup() },
+                                onMovePendingShareToVault = { viewModel.movePendingShareToVault() },
+                                onDismissPendingShare = { viewModel.dismissPendingShare() },
                                 onRefreshPermissions = { viewModel.refreshPermissions() },
                                 onStartScan = { viewModel.startDiscovery() },
                                 onStopScan = { viewModel.stopDiscovery() },
@@ -363,6 +408,11 @@ private fun MainAdaptiveScaffold(
                                 onDownloadItem = { item, toVault ->
                                     viewModel.downloadGroupItem(item, toVault)
                                 },
+                                onResendGroupItem = { item ->
+                                    viewModel.resendGroupItem(item)
+                                },
+                                onPauseTransfer = { id -> viewModel.pauseTransfer(id) },
+                                onResumeTransfer = { id -> viewModel.resumeTransfer(id) },
                                 onCancelTransfer = { id -> viewModel.cancelTransfer(id) },
                                 onSendChat = { text -> viewModel.sendChat(text) },
                                 onOpenReceivedFile = { rf -> viewModel.openReceivedFile(rf) },
@@ -370,6 +420,11 @@ private fun MainAdaptiveScaffold(
                                 onCopyOrMoveReceivedFile = { rf, uri, del ->
                                     viewModel.copyOrMoveReceivedFile(rf, uri, del)
                                 },
+                                onBatchMoveReceivedToVault = { list -> viewModel.moveReceivedFilesToVault(list) },
+                                onBatchCopyOrMoveReceivedFiles = { list, uri, del ->
+                                    viewModel.copyOrMoveReceivedFiles(list, uri, del)
+                                },
+                                onBatchDeleteReceivedFiles = { list -> viewModel.deleteReceivedFiles(list) },
                                 onRenameReceivedFile = { rf, newName ->
                                     viewModel.renameReceivedFile(rf, newName)
                                 },
@@ -392,6 +447,7 @@ private fun MainAdaptiveScaffold(
                                 storageRoots = storageRoots,
                                 currentFolderPath = currentFolderPath,
                                 currentFolderFiles = currentFolderFiles,
+                                storageSpaceInfo = storageSpaceInfo,
                                 allFilesGranted = permissions.allFilesGranted,
                                 isGroupActive = isGroupActive,
                                 isWideScreen = useRail,
@@ -400,6 +456,10 @@ private fun MainAdaptiveScaffold(
                                 onOpenDirectory = { path -> viewModel.openDirectory(path) },
                                 onNavigateUpDirectory = { viewModel.navigateUpDirectory() },
                                 onCreateNoMedia = { viewModel.createNoMediaInCurrentFolder() },
+                                onShareFolderToGroup = { path ->
+                                    viewModel.shareFolderToGroup(path)
+                                    navigateTab(ROUTE_GROUP)
+                                },
                                 onShareToGroup = { apps, files, uris ->
                                     viewModel.shareSelectedToGroup(apps, files, uris)
                                     navigateTab(ROUTE_GROUP)
@@ -446,6 +506,7 @@ private fun MainAdaptiveScaffold(
                             SettingsScreen(
                                 settings = settings,
                                 permissions = permissions,
+                                tempCacheBytes = tempCacheBytes,
                                 isWideScreen = useRail,
                                 onSetDeviceName = { viewModel.setDeviceName(it) },
                                 onSetLanguage = { viewModel.setLanguage(it) },
@@ -457,6 +518,7 @@ private fun MainAdaptiveScaffold(
                                 onSetSilentNotif = { viewModel.setSilentNotifications(it) },
                                 onSetCompleteOnlyNotif = { viewModel.setNotifyCompleteOnly(it) },
                                 onRefreshPermissions = { viewModel.refreshPermissions() },
+                                onClearTempCache = { viewModel.clearTempCache() },
                                 onOpenBackupCenter = openBackupCenter
                             )
                         }

@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material3.Button
@@ -53,6 +54,7 @@ import com.example.R
 import com.example.data.SaveLocationMode
 import com.example.data.UserSettings
 import com.example.ui.theme.ThemeMode
+import com.example.util.Formatters
 import com.example.util.LocaleHelper
 import com.example.util.PermissionSnapshot
 import com.example.util.PermissionsHelper
@@ -62,6 +64,7 @@ import com.example.util.PermissionsHelper
 fun SettingsScreen(
     settings: UserSettings,
     permissions: PermissionSnapshot,
+    tempCacheBytes: Long = 0L,
     isWideScreen: Boolean,
     onSetDeviceName: (String) -> Unit,
     onSetLanguage: (String) -> Unit,
@@ -73,6 +76,7 @@ fun SettingsScreen(
     onSetSilentNotif: (Boolean) -> Unit,
     onSetCompleteOnlyNotif: (Boolean) -> Unit,
     onRefreshPermissions: () -> Unit,
+    onClearTempCache: () -> Unit = {},
     onOpenBackupCenter: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -240,6 +244,34 @@ fun SettingsScreen(
                         Icon(Icons.Rounded.Backup, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.nav_backup))
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.settings_cache_title),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = Formatters.formatBytes(tempCacheBytes),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onClearTempCache,
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("clear_temp_cache_button")
+                        ) {
+                            Icon(Icons.Rounded.CleaningServices, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.settings_clear_cache_btn))
+                        }
                     }
                 }
             }

@@ -23,6 +23,7 @@ object P2pProtocol {
     const val TYPE_FILE_CHUNK = "FILE_CHUNK"
     const val TYPE_FILE_DONE = "FILE_DONE"
     const val TYPE_FILE_ERROR = "FILE_ERROR"
+    const val TYPE_DELIVERY_ACK = "DELIVERY_ACK"
     const val TYPE_PING = "PING"
 
     fun msg(type: String, block: JSONObject.() -> Unit = {}): ByteArray {

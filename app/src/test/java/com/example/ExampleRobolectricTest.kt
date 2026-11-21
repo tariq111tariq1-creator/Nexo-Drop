@@ -131,4 +131,115 @@ class ExampleRobolectricTest {
         app.p2pManager.setAutoReceiveFiles(true)
         assertTrue(app.p2pManager.state.value.autoReceiveFiles)
     }
+
+    @Test
+    fun `storageRepository collects folder files recursively and clears temp transfer cache`() = kotlinx.coroutines.runBlocking {
+        val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
+        val rootDir = java.io.File(app.cacheDir, "test_recursive_folder_${System.currentTimeMillis()}").apply { mkdirs() }
+        val subDir = java.io.File(rootDir, "nested").apply { mkdirs() }
+        java.io.File(rootDir, "a.txt").writeText("hello")
+        java.io.File(subDir, "b.bin").writeBytes(byteArrayOf(1, 2, 3, 4))
+
+        val relayTmp = java.io.File(app.cacheDir, "relay_test_tmp.bin").apply { writeBytes(ByteArray(128)) }
+        val apkDir = java.io.File(app.cacheDir, "apk_export").apply { mkdirs() }
+        val apkTmp = java.io.File(apkDir, "demo.apk").apply { writeBytes(ByteArray(256)) }
+
+        try {
+            val collected = app.storageRepository.collectFolderFilesRecursively(rootDir.absolutePath)
+            assertEquals(2, collected.size)
+            assertTrue(collected.any { it.name == "a.txt" })
+            assertTrue(collected.any { it.name == "b.bin" })
+
+            val sizeBefore = app.storageRepository.getTempTransferCacheBytes()
+            assertTrue(sizeBefore >= 384L)
+            val freed = app.storageRepository.clearTempTransferCache(includePartialDownloads = false)
+            assertTrue(freed >= 384L)
+            assertFalse(relayTmp.exists())
+            assertFalse(apkTmp.exists())
+        } finally {
+            rootDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `delivery ack protocol message encodes and workspace state stores receipts`() {
+        val rawBytes = com.example.p2p.P2pProtocol.msg(com.example.p2p.P2pProtocol.TYPE_DELIVERY_ACK) {
+            put("itemId", "item_01")
+            put("receiverName", "Pixel 8")
+        }
+        val json = com.example.p2p.P2pProtocol.parse(rawBytes)
+        assertEquals(com.example.p2p.P2pProtocol.TYPE_DELIVERY_ACK, json.getString("type"))
+        assertEquals("item_01", json.getString("itemId"))
+        assertEquals("Pixel 8", json.getString("receiverName"))
+
+        val ws = com.example.p2p.GroupWorkspaceState(
+            myDeviceId = "dev-1",
+            deliveryReceipts = mapOf("item_01" to listOf("Pixel 8"))
+        )
+        assertEquals("dev-1", ws.myDeviceId)
+        assertEquals(listOf("Pixel 8"), ws.deliveryReceipts["item_01"])
+    }
+
+    @Test
+    fun `webShareServer serves two-way HTML portal and accepts multipart file upload`() {
+        val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+        val uploadedNames = mutableListOf<String>()
+        val uploadedContents = mutableListOf<String>()
+        val latch = java.util.concurrent.CountDownLatch(1)
+
+        val server = com.example.p2p.WebShareServer(
+            scope = scope,
+            storageRepository = app.storageRepository,
+            cacheDir = app.cacheDir,
+            groupNameProvider = { "TestPortal" },
+            groupPinProvider = { "" },
+            sharedItemsProvider = { emptyList() },
+            localSourceLookup = { null },
+            onBrowserFileUploaded = { name, file, _ ->
+                uploadedNames += name
+                uploadedContents += file.readText()
+                file.delete()
+                latch.countDown()
+            }
+        )
+        val port = server.start()
+        try {
+            val connGet = java.net.URL("http://127.0.0.1:$port/").openConnection() as java.net.HttpURLConnection
+            assertEquals(200, connGet.responseCode)
+            val html = connGet.inputStream.bufferedReader().readText()
+            assertTrue(html.contains("TestPortal"))
+            assertTrue(html.contains("enctype=\"multipart/form-data\""))
+
+            val boundary = "----NexoTestBoundary123"
+            val connPost = (java.net.URL("http://127.0.0.1:$port/upload").openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
+            val payload = (
+                "--$boundary\r\n" +
+                    "Content-Disposition: form-data; name=\"files\"; filename=\"hello.txt\"\r\n" +
+                    "Content-Type: text/plain\r\n\r\n" +
+                    "Two-way LAN upload content!\r\n" +
+                    "--$boundary--\r\n"
+                ).toByteArray()
+            connPost.setFixedLengthStreamingMode(payload.size)
+            connPost.instanceFollowRedirects = false
+            connPost.outputStream.use { it.write(payload) }
+            assertEquals(303, connPost.responseCode)
+            val location = connPost.getHeaderField("Location")
+            assertTrue(location != null && location.contains("uploaded=1"))
+            val connAfter = java.net.URL("http://127.0.0.1:$port$location").openConnection() as java.net.HttpURLConnection
+            assertEquals(200, connAfter.responseCode)
+            val afterHtml = connAfter.inputStream.bufferedReader().readText()
+            assertTrue(afterHtml.contains("Uploaded 1 file(s)"))
+            assertTrue(latch.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(listOf("hello.txt"), uploadedNames)
+            assertEquals(listOf("Two-way LAN upload content!"), uploadedContents)
+        } finally {
+            server.stop()
+            scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
 }

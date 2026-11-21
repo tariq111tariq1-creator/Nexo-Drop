@@ -73,16 +73,21 @@ class P2pGroupManager(
     private val relayCacheFiles = ConcurrentHashMap<String, File>()
     private val pendingRelayWaiters = ConcurrentHashMap<String, CompletableDeferred<File?>>()
     private val activeCancelledIds = ConcurrentHashMap.newKeySet<String>()
+    private val pausedTransferIds = ConcurrentHashMap.newKeySet<String>()
     private val autoQueuedItemIds = ConcurrentHashMap.newKeySet<String>()
     private val autoReceiveChannel = Channel<Pair<SharedGroupItem, Boolean>>(Channel.UNLIMITED)
 
     private val webShareServer = WebShareServer(
         scope = scope,
         storageRepository = storageRepository,
+        cacheDir = context.cacheDir,
         groupNameProvider = { _state.value.groupName },
         groupPinProvider = { _state.value.groupPin },
         sharedItemsProvider = { _state.value.sharedItems },
-        localSourceLookup = { itemId -> localSources[itemId] }
+        localSourceLookup = { itemId -> localSources[itemId] },
+        onBrowserFileUploaded = { fileName, tempFile, mimeType ->
+            handleBrowserUploadedFile(fileName, tempFile, mimeType)
+        }
     )
 
     // Host state
@@ -126,6 +131,7 @@ class P2pGroupManager(
     init {
         scope.launch {
             myDeviceId = preferences.ensureDeviceId()
+            _state.value = _state.value.copy(myDeviceId = myDeviceId)
         }
         scope.launch {
             for ((item, toVault) in autoReceiveChannel) {
@@ -247,6 +253,7 @@ class P2pGroupManager(
         _state.value = _state.value.copy(
             phase = ConnectionPhase.HOSTING,
             role = GroupRole.HOST,
+            myDeviceId = myId,
             groupId = groupId,
             groupName = cleanGroupName,
             hostIp = directIp,
@@ -264,6 +271,7 @@ class P2pGroupManager(
             peers = listOf(hostPeer),
             pendingRequests = emptyList(),
             sharedItems = emptyList(),
+            deliveryReceipts = emptyMap(),
             receivedFiles = emptyList(),
             chatMessages = emptyList(),
             lastError = null
@@ -524,6 +532,7 @@ class P2pGroupManager(
             _state.value = _state.value.copy(
                 phase = ConnectionPhase.HOSTING,
                 role = GroupRole.HOST,
+                myDeviceId = myId,
                 groupId = groupId,
                 groupName = cleanGroupName,
                 hostIp = directIp,
@@ -541,6 +550,7 @@ class P2pGroupManager(
                 peers = listOf(hostPeer),
                 pendingRequests = emptyList(),
                 sharedItems = emptyList(),
+                deliveryReceipts = emptyMap(),
                 receivedFiles = emptyList(),
                 chatMessages = emptyList(),
                 lastError = null
@@ -751,6 +761,13 @@ class P2pGroupManager(
                         _state.value = _state.value.copy(chatMessages = _state.value.chatMessages + chat)
                         broadcastChat(chat, excludeDeviceId = session.deviceId)
                     }
+                    P2pProtocol.TYPE_DELIVERY_ACK -> {
+                        val itemId = msg.optString("itemId", "")
+                        val receiverName = msg.optString("receiverName", session.deviceName)
+                        if (itemId.isNotBlank()) {
+                            recordAndBroadcastDeliveryAck(itemId, receiverName)
+                        }
+                    }
                 }
             }
         } finally {
@@ -863,6 +880,102 @@ class P2pGroupManager(
                 client.writeMutex.withLock {
                     CryptoEngine.writeEncryptedFrame(client.out, client.sessionKey, payload)
                 }
+            }
+        }
+    }
+
+    private suspend fun recordAndBroadcastDeliveryAck(itemId: String, receiverName: String) {
+        val currentMap = _state.value.deliveryReceipts.toMutableMap()
+        val existing = currentMap[itemId].orEmpty()
+        if (!existing.contains(receiverName)) {
+            currentMap[itemId] = existing + receiverName
+            _state.value = _state.value.copy(deliveryReceipts = currentMap)
+        }
+        if (_state.value.role == GroupRole.HOST) {
+            val payload = P2pProtocol.msg(P2pProtocol.TYPE_DELIVERY_ACK) {
+                put("itemId", itemId)
+                put("receiverName", receiverName)
+            }
+            hostClients.values.forEach { client ->
+                runCatching {
+                    client.writeMutex.withLock {
+                        CryptoEngine.writeEncryptedFrame(client.out, client.sessionKey, payload)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleBrowserUploadedFile(fileName: String, tempFile: File, mimeType: String) {
+        scope.launch {
+            runCatching {
+                val size = tempFile.length()
+                val sha = CryptoEngine.sha256Hex(tempFile)
+                val category = FileCategory.fromFileNameAndMime(fileName, mimeType)
+                val saved = storageRepository.saveReceivedTempFile(
+                    tempFile = tempFile,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    settings = currentSettings,
+                    forceVault = false
+                )
+                tempFile.delete()
+                val itemId = UUID.randomUUID().toString().take(10)
+                val recvEntry = ReceivedGroupFile(
+                    id = itemId,
+                    itemId = itemId,
+                    fileName = fileName,
+                    fileSize = size,
+                    mimeType = mimeType,
+                    category = category,
+                    senderName = "Web Browser",
+                    sha256 = sha,
+                    savedLocation = saved.displayLocation,
+                    outputUri = saved.outputUri,
+                    filePath = saved.filePath,
+                    isInVault = saved.isInVault,
+                    vaultItemId = saved.vaultItem?.let { repository.addVaultItem(it) }
+                )
+                _state.value = _state.value.copy(
+                    receivedFiles = listOf(recvEntry) + _state.value.receivedFiles
+                )
+                repository.recordTransfer(
+                    TransferRecordEntity(
+                        transferId = itemId,
+                        fileName = fileName,
+                        fileSize = size,
+                        mimeType = mimeType,
+                        category = category.name,
+                        direction = TransferDirection.RECEIVED.name,
+                        peerDeviceName = "Web Browser",
+                        peerDeviceId = "web-browser",
+                        groupName = _state.value.groupName,
+                        speedBytesPerSec = size,
+                        durationMs = 1L,
+                        status = TransferStatus.COMPLETED.name,
+                        sha256 = sha,
+                        savedLocation = saved.displayLocation,
+                        isInVault = saved.isInVault
+                    )
+                )
+                _events.tryEmit(P2pEvent.FileReceived(fileName, size, saved.isInVault))
+
+                // Also share to Android members if Host is running a group
+                if (_state.value.role == GroupRole.HOST && !saved.isInVault) {
+                    val desc = LocalSourceDescriptor(
+                        itemId = itemId,
+                        fileName = fileName,
+                        fileSize = size,
+                        mimeType = mimeType,
+                        uri = saved.outputUri,
+                        filePath = saved.filePath,
+                        isAppPackage = fileName.lowercase().let { it.endsWith(".apk") || it.endsWith(".apks") },
+                        sha256 = sha
+                    )
+                    addFilesToSharedGroup(listOf(desc))
+                }
+            }.onFailure {
+                tempFile.delete()
             }
         }
     }
@@ -1002,10 +1115,12 @@ class P2pGroupManager(
 
                 _state.value = _state.value.copy(
                     phase = ConnectionPhase.CONNECTED,
+                    myDeviceId = myId,
                     connectionStep = 4,
                     groupId = resultJson.optString("groupId", ""),
                     groupName = lastConnectedName,
                     keyFingerprint = fingerprint,
+                    deliveryReceipts = emptyMap(),
                     myPermission = PeerPermission.FULL_ACCESS
                 )
                 TransferForegroundService.start(context, _state.value.groupName, hostPort)
@@ -1051,6 +1166,18 @@ class P2pGroupManager(
                                     val itemId = msg.getString("itemId")
                                     val requestId = msg.getString("requestId")
                                     launch { pushLocalFileToHostRelay(itemId, requestId) }
+                                }
+                                P2pProtocol.TYPE_DELIVERY_ACK -> {
+                                    val itemId = msg.optString("itemId", "")
+                                    val receiverName = msg.optString("receiverName", "")
+                                    if (itemId.isNotBlank() && receiverName.isNotBlank()) {
+                                        val currentMap = _state.value.deliveryReceipts.toMutableMap()
+                                        val existing = currentMap[itemId].orEmpty()
+                                        if (!existing.contains(receiverName)) {
+                                            currentMap[itemId] = existing + receiverName
+                                            _state.value = _state.value.copy(deliveryReceipts = currentMap)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1124,6 +1251,16 @@ class P2pGroupManager(
         }
     }
 
+    fun resendItemToGroup(item: SharedGroupItem) {
+        val localSrc = localSources[item.itemId] ?: return
+        val hasValidSource = localSrc.uri != null || (localSrc.filePath != null && File(localSrc.filePath).exists())
+        if (!hasValidSource) return
+        val freshDesc = localSrc.copy(itemId = UUID.randomUUID().toString().take(10))
+        addFilesToSharedGroup(listOf(freshDesc))
+    }
+
+    private class TransferPausedException : Exception("Paused by user")
+
     fun sendChatMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
@@ -1189,7 +1326,8 @@ class P2pGroupManager(
             speedBytesPerSec = 0L,
             isUpload = false,
             peerName = item.ownerDeviceName,
-            saveToVault = forceVault
+            saveToVault = forceVault,
+            sourceItem = item
         )
         upsertActiveTransfer(transfer)
         val safeName = item.fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -1199,14 +1337,32 @@ class P2pGroupManager(
             // If Host is downloading an item owned by a Member, request Member to push to relay cache first
             if (_state.value.role == GroupRole.HOST) {
                 val localSrc = localSources[item.itemId]
-                if (localSrc != null) {
-                    storageRepository.openInputStream(localSrc.uri, localSrc.filePath).use { input ->
-                        partFile.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
-                    }
+                val srcStream = if (localSrc != null) {
+                    storageRepository.openInputStream(localSrc.uri, localSrc.filePath)
                 } else {
                     val relayed = requestRelayFromOwner(item) ?: throw IllegalStateException("Owner peer unreachable")
-                    relayed.inputStream().use { input ->
-                        partFile.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+                    relayed.inputStream()
+                }
+                srcStream.use { input ->
+                    BufferedOutputStream(FileOutputStream(partFile, false)).use { out ->
+                        val buf = ByteArray(64 * 1024)
+                        var copied = 0L
+                        var lastUi = System.currentTimeMillis()
+                        while (true) {
+                            if (activeCancelledIds.contains(transferId)) throw IllegalStateException("Cancelled by user")
+                            if (pausedTransferIds.contains(transferId)) throw TransferPausedException()
+                            val n = input.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                            copied += n
+                            val now = System.currentTimeMillis()
+                            if (now - lastUi >= 150L) {
+                                val elapsed = (now - startTime).coerceAtLeast(1L)
+                                updateTransferProgress(transferId, copied, item.fileSize, (copied * 1000L) / elapsed)
+                                lastUi = now
+                            }
+                        }
+                        out.flush()
                     }
                 }
                 val sha = CryptoEngine.sha256Hex(partFile)
@@ -1252,12 +1408,18 @@ class P2pGroupManager(
                 val resumedFrom = metaJson.optLong("resumedFrom", 0L)
                 val appendMode = resumedFrom > 0L && resumedFrom == existingOffset
                 var received = if (appendMode) resumedFrom else 0L
+                if (appendMode) {
+                    updateTransferProgress(transferId, received, expectedSize, 0L)
+                }
                 var lastUiUpdate = System.currentTimeMillis()
 
                 BufferedOutputStream(FileOutputStream(partFile, appendMode)).use { out ->
                     while (true) {
                         if (activeCancelledIds.contains(transferId)) {
                             throw IllegalStateException("Cancelled by user")
+                        }
+                        if (pausedTransferIds.contains(transferId)) {
+                            throw TransferPausedException()
                         }
                         val chunk = CryptoEngine.readEncryptedFrame(dis, sessionKey)
                         if (chunk.isEmpty()) break // EOF sentinel
@@ -1286,6 +1448,22 @@ class P2pGroupManager(
                 val speed = (deltaReceived * 1000L) / elapsed
                 finishDownload(transferId, item, partFile, sha, speed, elapsed, forceVault)
             }
+        } catch (_: TransferPausedException) {
+            pausedTransferIds.remove(transferId)
+            val savedBytes = if (partFile.exists()) partFile.length() else 0L
+            _state.value = _state.value.copy(
+                activeTransfers = _state.value.activeTransfers.map {
+                    if (it.transferId == transferId) {
+                        it.copy(
+                            bytesTransferred = savedBytes.coerceAtLeast(it.bytesTransferred),
+                            speedBytesPerSec = 0L,
+                            isPaused = true,
+                            sourceItem = item
+                        )
+                    } else it
+                }
+            )
+            TransferForegroundService.stop(context)
         } catch (e: Exception) {
             val cancelled = activeCancelledIds.remove(transferId)
             if (cancelled) partFile.delete()
@@ -1372,6 +1550,23 @@ class P2pGroupManager(
             )
         )
         _events.tryEmit(P2pEvent.FileReceived(item.fileName, item.fileSize, saved.isInVault))
+
+        if (_state.value.role == GroupRole.HOST) {
+            recordAndBroadcastDeliveryAck(item.itemId, currentSettings.deviceName)
+        } else if (_state.value.role == GroupRole.MEMBER) {
+            val out = clientControlOut
+            val key = clientControlKey
+            if (out != null && key != null) {
+                runCatching {
+                    clientWriteMutex.withLock {
+                        CryptoEngine.writeEncryptedFrame(out, key, P2pProtocol.msg(P2pProtocol.TYPE_DELIVERY_ACK) {
+                            put("itemId", item.itemId)
+                            put("receiverName", currentSettings.deviceName)
+                        })
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun requestRelayFromOwner(item: SharedGroupItem): File? {
@@ -1632,8 +1827,30 @@ class P2pGroupManager(
         }
     }
 
+    fun pauseTransfer(transferId: String) {
+        val current = _state.value.activeTransfers.firstOrNull { it.transferId == transferId } ?: return
+        if (current.isUpload || current.isCompleted || current.isPaused) return
+        pausedTransferIds.add(transferId)
+    }
+
+    fun resumeTransfer(transferId: String) {
+        val paused = _state.value.activeTransfers.firstOrNull { it.transferId == transferId } ?: return
+        val item = paused.sourceItem ?: _state.value.sharedItems.firstOrNull { it.itemId == paused.itemId } ?: return
+        pausedTransferIds.remove(transferId)
+        _state.value = _state.value.copy(
+            activeTransfers = _state.value.activeTransfers.filterNot { it.transferId == transferId }
+        )
+        downloadGroupItem(item, paused.saveToVault)
+    }
+
     fun cancelTransfer(transferId: String) {
+        val target = _state.value.activeTransfers.firstOrNull { it.transferId == transferId }
+        pausedTransferIds.remove(transferId)
         activeCancelledIds.add(transferId)
+        if (target != null && !target.isUpload) {
+            val safeName = target.fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            File(context.cacheDir, "part_${target.itemId}_$safeName").takeIf { it.exists() }?.delete()
+        }
         _state.value = _state.value.copy(
             activeTransfers = _state.value.activeTransfers.filterNot { it.transferId == transferId }
         )
@@ -1720,11 +1937,17 @@ class P2pGroupManager(
         relayCacheFiles.values.forEach { it.delete() }
         relayCacheFiles.clear()
         autoQueuedItemIds.clear()
+        pausedTransferIds.clear()
+        activeCancelledIds.clear()
+        if (resetToIdle) {
+            storageRepository.clearTempTransferCache(includePartialDownloads = true)
+        }
 
         TransferForegroundService.stop(context)
 
         if (resetToIdle) {
             _state.value = GroupWorkspaceState(
+                myDeviceId = myDeviceId,
                 autoReceiveFiles = preserveAutoReceive,
                 discoveredGroups = _state.value.discoveredGroups,
                 isScanning = _state.value.isScanning,

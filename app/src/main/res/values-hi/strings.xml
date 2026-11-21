@@ -253,4 +253,25 @@
     <string name="msg_file_deleted">फ़ाइल हटाई गई</string>
     <string name="msg_file_copied">फ़ाइल कॉपी हुई</string>
     <string name="msg_file_moved">फ़ाइल स्थानांतरित हुई</string>
+    <string name="settings_cache_title">अस्थायी ट्रांसफर कैश</string>
+    <string name="settings_clear_cache_btn">साफ़ करें</string>
+    <string name="settings_cache_cleared">%1$s कैश साफ़ किया गया</string>
+    <string name="explorer_view_list">सूची दृश्य</string>
+    <string name="explorer_view_grid">ग्रिड दृश्य</string>
+    <string name="explorer_select_all">सभी चुनें</string>
+    <string name="explorer_storage_free_total">खाली: %1$s / %2$s</string>
+    <string name="explorer_send_folder">पूरा फ़ोल्डर भेजें</string>
+    <string name="hub_pending_share_title">%1$d फ़ाइल(ें) साझा करने के लिए तैयार</string>
+    <string name="hub_pending_share_create_send">ग्रुप बनाएं और भेजें</string>
+    <string name="hub_stats_sent_recv">भेजी: %1$d • प्राप्त: %2$d</string>
+    <string name="hub_qr_collapse">QR छिपाएं</string>
+    <string name="hub_qr_expand">QR दिखाएं</string>
+    <string name="hub_transfer_pause">रोकें</string>
+    <string name="hub_transfer_resume">फिर शुरू करें</string>
+    <string name="hub_transfer_paused">रुका हुआ</string>
+    <string name="hub_sent_files_title">भेजी गई फ़ाइलें (%1$d)</string>
+    <string name="hub_delivered_to">%1$s को प्राप्त</string>
+    <string name="hub_sent_waiting">भेजा गया — प्रतीक्षारत</string>
+    <string name="hub_resend">फिर से भेजें</string>
+    <string name="hub_paste_send">पेस्ट करें और भेजें</string>
 </resources>

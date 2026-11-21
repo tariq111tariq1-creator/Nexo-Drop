@@ -13,9 +13,11 @@ import com.example.data.InstalledAppItem
 import com.example.data.RestoreResult
 import com.example.data.SaveLocationMode
 import com.example.data.StorageRootInfo
+import com.example.data.StorageSpaceInfo
 import com.example.data.TransferRecordEntity
 import com.example.data.UserSettings
 import com.example.data.VaultItemEntity
+import com.example.p2p.ConnectionPhase
 import com.example.p2p.GroupWorkspaceState
 import com.example.p2p.LocalSourceDescriptor
 import com.example.p2p.P2pEvent
@@ -107,8 +109,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _joinApprovalFocusTick = MutableStateFlow(0)
     val joinApprovalFocusTick: StateFlow<Int> = _joinApprovalFocusTick.asStateFlow()
 
+    private val _openGroupTabTick = MutableStateFlow(0)
+    val openGroupTabTick: StateFlow<Int> = _openGroupTabTick.asStateFlow()
+
+    private val _pendingExternalShareUris = MutableStateFlow<List<Uri>>(emptyList())
+    val pendingExternalShareUris: StateFlow<List<Uri>> = _pendingExternalShareUris.asStateFlow()
+
+    private val _storageSpaceInfo = MutableStateFlow<StorageSpaceInfo?>(null)
+    val storageSpaceInfo: StateFlow<StorageSpaceInfo?> = _storageSpaceInfo.asStateFlow()
+
+    private val _tempCacheBytes = MutableStateFlow(0L)
+    val tempCacheBytes: StateFlow<Long> = _tempCacheBytes.asStateFlow()
+
     fun triggerFocusJoinApproval() {
         _joinApprovalFocusTick.value += 1
+    }
+
+    fun triggerOpenGroupTab() {
+        _openGroupTabTick.value += 1
     }
 
     init {
@@ -116,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             preferences.ensureDeviceId()
         }
         refreshStorageAndApps(includeSystemApps = false)
+        refreshTempCacheSize()
         observeP2pEvents()
     }
 
@@ -166,9 +185,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val rootPath = roots.first().path
                 _currentFolderPath.value = rootPath
                 _currentFolderFiles.value = storageRepository.listRawDirectory(rootPath)
+                _storageSpaceInfo.value = storageRepository.getStorageSpaceInfo(rootPath)
             } else if (_currentFolderPath.value.isNotBlank()) {
                 _currentFolderFiles.value = storageRepository.listRawDirectory(_currentFolderPath.value)
+                _storageSpaceInfo.value = storageRepository.getStorageSpaceInfo(_currentFolderPath.value)
             }
+            _tempCacheBytes.value = storageRepository.getTempTransferCacheBytes()
         }
     }
 
@@ -176,6 +198,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _currentFolderPath.value = path
             _currentFolderFiles.value = storageRepository.listRawDirectory(path)
+            _storageSpaceInfo.value = storageRepository.getStorageSpaceInfo(path)
         }
     }
 
@@ -290,7 +313,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun sendChat(text: String) = p2pManager.sendChatMessage(text)
     fun downloadGroupItem(item: SharedGroupItem, toVault: Boolean) = p2pManager.downloadGroupItem(item, toVault)
     fun cancelTransfer(transferId: String) = p2pManager.cancelTransfer(transferId)
+    fun pauseTransfer(transferId: String) = p2pManager.pauseTransfer(transferId)
+    fun resumeTransfer(transferId: String) = p2pManager.resumeTransfer(transferId)
+    fun resendGroupItem(item: SharedGroupItem) = p2pManager.resendItemToGroup(item)
     fun setAutoReceiveFiles(enabled: Boolean) = p2pManager.setAutoReceiveFiles(enabled)
+
+    fun refreshTempCacheSize() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _tempCacheBytes.value = storageRepository.getTempTransferCacheBytes()
+        }
+    }
+
+    fun clearTempCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val freed = storageRepository.clearTempTransferCache(includePartialDownloads = false)
+            _tempCacheBytes.value = storageRepository.getTempTransferCacheBytes()
+            _uiMessages.tryEmit(app.getString(R.string.settings_cache_cleared, Formatters.formatBytes(freed)))
+        }
+    }
+
+    fun handleExternalShare(uris: List<Uri>, sharedText: String?) {
+        val phase = groupState.value.phase
+        val isActive = phase == ConnectionPhase.HOSTING || phase == ConnectionPhase.CONNECTED
+        if (isActive) {
+            if (uris.isNotEmpty()) {
+                shareSelectedToGroup(emptyList(), emptyList(), uris)
+            }
+            if (!sharedText.isNullOrBlank()) {
+                sendChat(sharedText)
+            }
+        } else {
+            if (uris.isNotEmpty()) {
+                _pendingExternalShareUris.value = (_pendingExternalShareUris.value + uris).distinct()
+            } else if (!sharedText.isNullOrBlank()) {
+                _uiMessages.tryEmit(sharedText)
+            }
+        }
+    }
+
+    fun sendPendingShareToGroup() {
+        val uris = _pendingExternalShareUris.value
+        if (uris.isEmpty()) return
+        _pendingExternalShareUris.value = emptyList()
+        shareSelectedToGroup(emptyList(), emptyList(), uris)
+    }
+
+    fun movePendingShareToVault() {
+        val uris = _pendingExternalShareUris.value
+        if (uris.isEmpty()) return
+        _pendingExternalShareUris.value = emptyList()
+        hideFilesInVault(emptyList(), uris)
+    }
+
+    fun dismissPendingShare() {
+        _pendingExternalShareUris.value = emptyList()
+    }
+
+    fun shareFolderToGroup(folderPath: String) {
+        if (folderPath.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val files = storageRepository.collectFolderFilesRecursively(folderPath)
+            if (files.isEmpty()) {
+                _uiMessages.tryEmit(app.getString(R.string.explorer_empty))
+            } else {
+                shareSelectedToGroup(emptyList(), files, emptyList())
+            }
+        }
+    }
 
     // --- Received File Controls ---
 
@@ -451,6 +540,98 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 storageRepository.deleteReceivedFile(file.outputUri, file.filePath)
             }
             p2pManager.removeReceivedFile(file.id)
+            _uiMessages.tryEmit(app.getString(R.string.msg_file_deleted))
+        }
+    }
+
+    fun moveReceivedFilesToVault(files: List<ReceivedGroupFile>) {
+        val targets = files.filterNot { it.isInVault }
+        if (targets.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            var count = 0
+            targets.forEach { file ->
+                runCatching {
+                    val encRes = storageRepository.openInputStream(file.outputUri, file.filePath).use { input ->
+                        vaultManager.encryptIntoVault(input)
+                    }
+                    val insertedId = repository.addVaultItem(
+                        VaultItemEntity(
+                            originalName = file.fileName,
+                            encryptedFileName = encRes.encryptedFileName,
+                            fileSize = encRes.plainSize,
+                            mimeType = file.mimeType,
+                            category = file.category.name,
+                            sha256 = encRes.sha256,
+                            originalUriOrPath = "vault://${encRes.encryptedFileName}"
+                        )
+                    )
+                    storageRepository.deleteReceivedFile(file.outputUri, file.filePath)
+                    p2pManager.updateReceivedFile(file.id) {
+                        it.copy(
+                            isInVault = true,
+                            vaultItemId = insertedId,
+                            savedLocation = "Private Vault",
+                            outputUri = null,
+                            filePath = null
+                        )
+                    }
+                    count++
+                }
+            }
+            if (count > 0) _uiMessages.tryEmit(app.getString(R.string.msg_saved_to_vault))
+        }
+    }
+
+    fun copyOrMoveReceivedFiles(files: List<ReceivedGroupFile>, targetTreeUri: Uri, deleteOriginal: Boolean) {
+        val targets = files.filterNot { it.isInVault }
+        if (targets.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            var count = 0
+            val folderLabel = storageRepository.getTreeDisplayName(targetTreeUri)
+            targets.forEach { file ->
+                runCatching {
+                    val destUri = storageRepository.copyOrMoveReceivedFileToFolder(
+                        uri = file.outputUri,
+                        filePath = file.filePath,
+                        fileName = file.fileName,
+                        mimeType = file.mimeType,
+                        targetTreeUri = targetTreeUri,
+                        deleteOriginal = deleteOriginal
+                    )
+                    if (destUri != null) {
+                        if (deleteOriginal) {
+                            p2pManager.updateReceivedFile(file.id) {
+                                it.copy(savedLocation = folderLabel, outputUri = destUri, filePath = null)
+                            }
+                        }
+                        count++
+                    }
+                }
+            }
+            if (count > 0) {
+                _uiMessages.tryEmit(
+                    if (deleteOriginal) app.getString(R.string.msg_file_moved)
+                    else app.getString(R.string.msg_file_copied)
+                )
+            }
+        }
+    }
+
+    fun deleteReceivedFiles(files: List<ReceivedGroupFile>) {
+        if (files.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            files.forEach { file ->
+                if (file.isInVault && file.vaultItemId != null) {
+                    val entity = vaultItems.value.firstOrNull { it.id == file.vaultItemId }
+                    if (entity != null) {
+                        vaultManager.deleteEncryptedFile(entity.encryptedFileName)
+                        repository.removeVaultItem(entity.id)
+                    }
+                } else {
+                    storageRepository.deleteReceivedFile(file.outputUri, file.filePath)
+                }
+                p2pManager.removeReceivedFile(file.id)
+            }
             _uiMessages.tryEmit(app.getString(R.string.msg_file_deleted))
         }
     }

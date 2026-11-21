@@ -68,6 +68,11 @@ data class StorageRootInfo(
     val isRemovable: Boolean
 )
 
+data class StorageSpaceInfo(
+    val freeBytes: Long,
+    val totalBytes: Long
+)
+
 class StorageRepository(
     private val context: Context,
     private val vaultManager: VaultManager
@@ -625,6 +630,93 @@ class StorageRepository(
             val stat = android.os.StatFs(Environment.getExternalStorageDirectory().path)
             stat.availableBytes
         }.getOrDefault(Long.MAX_VALUE)
+    }
+
+    fun getStorageSpaceInfo(path: String): StorageSpaceInfo? {
+        return runCatching {
+            val target = File(path).takeIf { it.exists() } ?: Environment.getExternalStorageDirectory()
+            val stat = android.os.StatFs(target.absolutePath)
+            StorageSpaceInfo(
+                freeBytes = stat.availableBytes,
+                totalBytes = stat.totalBytes
+            )
+        }.getOrNull()
+    }
+
+    suspend fun collectFolderFilesRecursively(folderPath: String, maxFiles: Int = 400): List<DeviceFileItem> =
+        withContext(Dispatchers.IO) {
+            val root = File(folderPath)
+            if (!root.exists() || !root.isDirectory) return@withContext emptyList()
+            val collected = mutableListOf<DeviceFileItem>()
+            val queue = ArrayDeque<File>()
+            queue.add(root)
+            while (queue.isNotEmpty() && collected.size < maxFiles) {
+                val dir = queue.removeFirst()
+                val children = dir.listFiles() ?: continue
+                for (child in children) {
+                    if (collected.size >= maxFiles) break
+                    if (child.isDirectory) {
+                        queue.addLast(child)
+                    } else if (child.isFile) {
+                        val mime = guessMimeType(child.name)
+                        collected += DeviceFileItem(
+                            id = child.absolutePath,
+                            name = child.name,
+                            size = child.length(),
+                            mimeType = mime,
+                            category = FileCategory.fromFileNameAndMime(child.name, mime),
+                            modifiedAt = child.lastModified(),
+                            uri = Uri.fromFile(child),
+                            filePath = child.absolutePath,
+                            isDirectory = false
+                        )
+                    }
+                }
+            }
+            collected
+        }
+
+    fun getTempTransferCacheBytes(): Long {
+        var total = 0L
+        val dirs = listOf("apk_export", "apk_install", "vault_preview", "reports")
+        dirs.forEach { dirName ->
+            val d = File(context.cacheDir, dirName)
+            if (d.exists()) {
+                d.walkTopDown().filter { it.isFile }.forEach { total += it.length() }
+            }
+        }
+        context.cacheDir.listFiles()?.forEach { f ->
+            if (f.isFile && (f.name.startsWith("part_") || f.name.startsWith("relay_") || f.name.startsWith("web_up_"))) {
+                total += f.length()
+            }
+        }
+        return total
+    }
+
+    fun clearTempTransferCache(includePartialDownloads: Boolean = false): Long {
+        var freed = 0L
+        val dirs = listOf("apk_export", "apk_install", "vault_preview", "reports")
+        dirs.forEach { dirName ->
+            val d = File(context.cacheDir, dirName)
+            if (d.exists()) {
+                d.walkTopDown().filter { it.isFile }.forEach { f ->
+                    val len = f.length()
+                    if (f.delete()) freed += len
+                }
+            }
+        }
+        context.cacheDir.listFiles()?.forEach { f ->
+            val isTemp = f.isFile && (
+                f.name.startsWith("relay_") ||
+                    f.name.startsWith("web_up_") ||
+                    (includePartialDownloads && f.name.startsWith("part_"))
+                )
+            if (isTemp) {
+                val len = f.length()
+                if (f.delete()) freed += len
+            }
+        }
+        return freed
     }
 
     suspend fun openReceivedFile(uri: Uri?, filePath: String?, fileName: String, mimeType: String) {

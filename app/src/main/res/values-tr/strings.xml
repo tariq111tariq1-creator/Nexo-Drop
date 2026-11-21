@@ -253,4 +253,25 @@
     <string name="msg_file_deleted">Dosya silindi</string>
     <string name="msg_file_copied">Dosya kopyalandı</string>
     <string name="msg_file_moved">Dosya taşındı</string>
+    <string name="settings_cache_title">Geçici aktarım önbelleği</string>
+    <string name="settings_clear_cache_btn">Temizle</string>
+    <string name="settings_cache_cleared">%1$s temizlendi</string>
+    <string name="explorer_view_list">Liste Görünümü</string>
+    <string name="explorer_view_grid">Izgara Görünümü</string>
+    <string name="explorer_select_all">Tümünü Seç</string>
+    <string name="explorer_storage_free_total">Boş: %1$s / %2$s</string>
+    <string name="explorer_send_folder">Tüm Klasörü Gönder</string>
+    <string name="hub_pending_share_title">%1$d dosya paylaşıma hazır</string>
+    <string name="hub_pending_share_create_send">Grup Oluştur &amp; Gönder</string>
+    <string name="hub_stats_sent_recv">Gönderilen: %1$d • Alınan: %2$d</string>
+    <string name="hub_qr_collapse">QR Gizle</string>
+    <string name="hub_qr_expand">QR Göster</string>
+    <string name="hub_transfer_pause">Duraklat</string>
+    <string name="hub_transfer_resume">Devam Et</string>
+    <string name="hub_transfer_paused">Duraklatıldı</string>
+    <string name="hub_sent_files_title">Gönderilenler (%1$d)</string>
+    <string name="hub_delivered_to">Teslim alan: %1$s</string>
+    <string name="hub_sent_waiting">Gönderildi — bekleniyor</string>
+    <string name="hub_resend">Tekrar Gönder</string>
+    <string name="hub_paste_send">Yapıştır &amp; Gönder</string>
 </resources>

@@ -253,4 +253,25 @@
     <string name="msg_file_deleted">Datei gelöscht</string>
     <string name="msg_file_copied">Datei kopiert</string>
     <string name="msg_file_moved">Datei verschoben</string>
+    <string name="settings_cache_title">Temporärer Übertragungscache</string>
+    <string name="settings_clear_cache_btn">Cache leeren</string>
+    <string name="settings_cache_cleared">%1$s Cache geleert</string>
+    <string name="explorer_view_list">Listenansicht</string>
+    <string name="explorer_view_grid">Rasteransicht</string>
+    <string name="explorer_select_all">Alle auswählen</string>
+    <string name="explorer_storage_free_total">Frei: %1$s / %2$s</string>
+    <string name="explorer_send_folder">Ganzen Ordner senden</string>
+    <string name="hub_pending_share_title">%1$d Datei(en) bereit zum Teilen</string>
+    <string name="hub_pending_share_create_send">Gruppe erstellen &amp; senden</string>
+    <string name="hub_stats_sent_recv">Gesendet: %1$d • Empfangen: %2$d</string>
+    <string name="hub_qr_collapse">QR ausblenden</string>
+    <string name="hub_qr_expand">QR anzeigen</string>
+    <string name="hub_transfer_pause">Pause</string>
+    <string name="hub_transfer_resume">Fortsetzen</string>
+    <string name="hub_transfer_paused">Pausiert</string>
+    <string name="hub_sent_files_title">Gesendete Dateien (%1$d)</string>
+    <string name="hub_delivered_to">Empfangen von %1$s</string>
+    <string name="hub_sent_waiting">Gesendet — wartet</string>
+    <string name="hub_resend">Erneut senden</string>
+    <string name="hub_paste_send">Einfügen &amp; senden</string>
 </resources>

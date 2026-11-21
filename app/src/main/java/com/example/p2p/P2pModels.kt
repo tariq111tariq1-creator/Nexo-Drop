@@ -106,7 +106,8 @@ data class ActiveTransfer(
     val saveToVault: Boolean = false,
     val isPaused: Boolean = false,
     val isCompleted: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val sourceItem: SharedGroupItem? = null
 ) {
     val progress: Float
         get() = if (totalBytes <= 0L) 0f else (bytesTransferred.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
@@ -145,6 +146,7 @@ data class ReceivedGroupFile(
 data class GroupWorkspaceState(
     val phase: ConnectionPhase = ConnectionPhase.IDLE,
     val role: GroupRole = GroupRole.NONE,
+    val myDeviceId: String = "",
     val groupId: String = "",
     val groupName: String = "",
     val hostIp: String = "",
@@ -162,6 +164,7 @@ data class GroupWorkspaceState(
     val peers: List<GroupPeer> = emptyList(),
     val pendingRequests: List<PendingJoinRequest> = emptyList(),
     val sharedItems: List<SharedGroupItem> = emptyList(),
+    val deliveryReceipts: Map<String, List<String>> = emptyMap(),
     val receivedFiles: List<ReceivedGroupFile> = emptyList(),
     val activeTransfers: List<ActiveTransfer> = emptyList(),
     val chatMessages: List<GroupChatMessage> = emptyList(),

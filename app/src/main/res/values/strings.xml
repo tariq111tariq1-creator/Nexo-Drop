@@ -275,4 +275,27 @@
     <string name="msg_file_deleted">File deleted</string>
     <string name="msg_file_copied">File copied to selected folder</string>
     <string name="msg_file_moved">File moved to selected folder</string>
+
+    <!-- Comprehensive UX & Transfer Upgrades -->
+    <string name="settings_cache_title">Temporary transfer cache</string>
+    <string name="settings_clear_cache_btn">Clear Cache</string>
+    <string name="settings_cache_cleared">Cleared %1$s of temporary cache</string>
+    <string name="explorer_view_list">List View</string>
+    <string name="explorer_view_grid">Grid View</string>
+    <string name="explorer_select_all">Select All</string>
+    <string name="explorer_storage_free_total">Free: %1$s / %2$s</string>
+    <string name="explorer_send_folder">Send Whole Folder</string>
+    <string name="hub_pending_share_title">%1$d file(s) ready to share</string>
+    <string name="hub_pending_share_create_send">Create Group &amp; Send</string>
+    <string name="hub_stats_sent_recv">Sent: %1$d • Received: %2$d</string>
+    <string name="hub_qr_collapse">Hide QR</string>
+    <string name="hub_qr_expand">Show QR</string>
+    <string name="hub_transfer_pause">Pause</string>
+    <string name="hub_transfer_resume">Resume</string>
+    <string name="hub_transfer_paused">Paused</string>
+    <string name="hub_sent_files_title">Sent Files (%1$d)</string>
+    <string name="hub_delivered_to">Received by %1$s</string>
+    <string name="hub_sent_waiting">Sent — awaiting download</string>
+    <string name="hub_resend">Re-send</string>
+    <string name="hub_paste_send">Paste &amp; Send</string>
 </resources>

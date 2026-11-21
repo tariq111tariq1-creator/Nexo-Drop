@@ -275,4 +275,27 @@
     <string name="msg_file_deleted">تم حذف الملف</string>
     <string name="msg_file_copied">تم نسخ الملف إلى المجلد المحدد</string>
     <string name="msg_file_moved">تم نقل الملف إلى المجلد المحدد</string>
+
+    <!-- التحسينات الشاملة للعرض والنقل -->
+    <string name="settings_cache_title">الذاكرة المؤقتة للنقل</string>
+    <string name="settings_clear_cache_btn">تنظيف</string>
+    <string name="settings_cache_cleared">تم تحرير %1$s من الملفات المؤقتة</string>
+    <string name="explorer_view_list">عرض كقائمة</string>
+    <string name="explorer_view_grid">عرض كشبكة</string>
+    <string name="explorer_select_all">تحديد الكل</string>
+    <string name="explorer_storage_free_total">المتاح: %1$s / %2$s</string>
+    <string name="explorer_send_folder">إرسال المجلد كاملاً</string>
+    <string name="hub_pending_share_title">%1$d ملف جاهز للمشاركة</string>
+    <string name="hub_pending_share_create_send">إنشاء مجموعة وإرسال</string>
+    <string name="hub_stats_sent_recv">مُرسلة: %1$d • مستلمة: %2$d</string>
+    <string name="hub_qr_collapse">إخفاء QR</string>
+    <string name="hub_qr_expand">إظهار QR</string>
+    <string name="hub_transfer_pause">إيقاف مؤقت</string>
+    <string name="hub_transfer_resume">استئناف</string>
+    <string name="hub_transfer_paused">متوقف مؤقتاً</string>
+    <string name="hub_sent_files_title">الملفات المُرسلة (%1$d)</string>
+    <string name="hub_delivered_to">تم الاستلام لدى: %1$s</string>
+    <string name="hub_sent_waiting">تم الإرسال — بانتظار التنزيل</string>
+    <string name="hub_resend">إعادة إرسال</string>
+    <string name="hub_paste_send">لصق وإرسال</string>
 </resources>

@@ -253,4 +253,25 @@
     <string name="msg_file_deleted">Ficheiro eliminado</string>
     <string name="msg_file_copied">Ficheiro copiado</string>
     <string name="msg_file_moved">Ficheiro movido</string>
+    <string name="settings_cache_title">Cache temporária</string>
+    <string name="settings_clear_cache_btn">Limpar</string>
+    <string name="settings_cache_cleared">%1$s libertados</string>
+    <string name="explorer_view_list">Vista lista</string>
+    <string name="explorer_view_grid">Vista grelha</string>
+    <string name="explorer_select_all">Selecionar tudo</string>
+    <string name="explorer_storage_free_total">Livre: %1$s / %2$s</string>
+    <string name="explorer_send_folder">Enviar pasta inteira</string>
+    <string name="hub_pending_share_title">%1$d ficheiro(s) pronto(s)</string>
+    <string name="hub_pending_share_create_send">Criar grupo e enviar</string>
+    <string name="hub_stats_sent_recv">Enviados: %1$d • Recebidos: %2$d</string>
+    <string name="hub_qr_collapse">Ocultar QR</string>
+    <string name="hub_qr_expand">Mostrar QR</string>
+    <string name="hub_transfer_pause">Pausar</string>
+    <string name="hub_transfer_resume">Retomar</string>
+    <string name="hub_transfer_paused">Em pausa</string>
+    <string name="hub_sent_files_title">Enviados (%1$d)</string>
+    <string name="hub_delivered_to">Recebido por %1$s</string>
+    <string name="hub_sent_waiting">Enviado — a aguardar</string>
+    <string name="hub_resend">Reenviar</string>
+    <string name="hub_paste_send">Colar e enviar</string>
 </resources>
