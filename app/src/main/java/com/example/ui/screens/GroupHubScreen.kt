@@ -3,7 +3,17 @@ package com.example.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,26 +30,35 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.GroupAdd
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiTethering
@@ -75,6 +94,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -82,8 +103,10 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.example.R
 import com.example.p2p.ConnectionPhase
 import com.example.p2p.DiscoveredGroup
@@ -111,6 +134,7 @@ fun GroupHubScreen(
     state: GroupWorkspaceState,
     permissions: PermissionSnapshot,
     isWideScreen: Boolean,
+    joinApprovalFocusTick: Int = 0,
     onRefreshPermissions: () -> Unit,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
@@ -120,7 +144,7 @@ fun GroupHubScreen(
     onToggleLocalNetwork: (Boolean) -> Unit,
     onToggleAutoReceive: (Boolean) -> Unit,
     onParseQr: (String) -> ScannedQrResult?,
-    onJoinViaDirectCredentials: (ssid: String, pass: String, ip: String, port: Int, groupName: String, pin: String) -> Unit,
+    onJoinViaDirectCredentials: (ssid: String, pass: String, ip: String, port: Int, groupName: String, pin: String, hostMac: String) -> Unit,
     onCreateGroup: (name: String, pin: String, autoApprove: Boolean, webShare: Boolean) -> Unit,
     onJoinGroup: (ip: String, port: Int, groupName: String, pin: String) -> Unit,
     onLeaveOrCloseGroup: () -> Unit,
@@ -145,6 +169,7 @@ fun GroupHubScreen(
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
+    val listState = rememberLazyListState()
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showManualJoinDialog by remember { mutableStateOf(false) }
@@ -157,6 +182,18 @@ fun GroupHubScreen(
     var selectedReceivedFile by remember { mutableStateOf<ReceivedGroupFile?>(null) }
     var activeGroupTab by remember { mutableIntStateOf(0) }
     var chatInput by remember { mutableStateOf("") }
+    var highlightJoinRequests by remember { mutableStateOf(false) }
+
+    val pulseTransition = rememberInfiniteTransition(label = "hub_pulse")
+    val pulseAlpha by pulseTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_dot"
+    )
 
     val quickFilePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -184,17 +221,49 @@ fun GroupHubScreen(
         }
     }
 
+    val showPrereqBanner = !permissions.nearbyWifiGranted || !permissions.locationGranted || !permissions.wifiEnabled || !permissions.locationServiceEnabled
+    val isGroupActive = state.phase == ConnectionPhase.HOSTING || state.phase == ConnectionPhase.CONNECTED
+
+    LaunchedEffect(joinApprovalFocusTick, state.pendingRequests.size, state.phase) {
+        if (joinApprovalFocusTick > 0 && state.role == GroupRole.HOST && state.pendingRequests.isNotEmpty() && isGroupActive) {
+            val targetIdx = 1 +
+                (if (showPrereqBanner) 1 else 0) +
+                (if (qrInvalidWarning) 1 else 0) +
+                (if (state.lastError != null) 1 else 0) +
+                1
+            listState.animateScrollToItem(targetIdx)
+            highlightJoinRequests = true
+            delay(2800)
+            highlightJoinRequests = false
+        }
+    }
+
+    LaunchedEffect(isGroupActive, activeGroupTab, state.chatMessages.size) {
+        if (isGroupActive && activeGroupTab == 2) {
+            val total = listState.layoutInfo.totalItemsCount
+            if (total > 0) {
+                listState.animateScrollToItem((total - 1).coerceAtLeast(0))
+            }
+        }
+    }
+
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .widthIn(max = if (isWideScreen) 980.dp else 640.dp)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .fillMaxSize()
         ) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -361,12 +430,32 @@ fun GroupHubScreen(
                     // Primary Direct Connection Card (No Router Required)
                     item {
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateContentSize(
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                ),
+                            shape = RoundedCornerShape(22.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                            ),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.26f),
+                                                MaterialTheme.colorScheme.surface
+                                            )
+                                        )
+                                    )
                                     .padding(20.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
@@ -378,6 +467,17 @@ fun GroupHubScreen(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    MaterialTheme.colorScheme.primary.copy(
+                                                        alpha = if (state.isScanning) pulseAlpha else 0.7f
+                                                    )
+                                                )
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Icon(
                                             Icons.Rounded.WifiTethering,
                                             contentDescription = null,
@@ -417,9 +517,9 @@ fun GroupHubScreen(
                                         },
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(48.dp)
+                                            .height(50.dp)
                                             .testTag("create_group_button"),
-                                        shape = RoundedCornerShape(14.dp)
+                                        shape = RoundedCornerShape(16.dp)
                                     ) {
                                         Icon(Icons.Rounded.GroupAdd, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
@@ -433,9 +533,9 @@ fun GroupHubScreen(
                                         },
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(48.dp)
+                                            .height(50.dp)
                                             .testTag("scan_qr_button"),
-                                        shape = RoundedCornerShape(14.dp)
+                                        shape = RoundedCornerShape(16.dp)
                                     ) {
                                         Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
@@ -478,7 +578,19 @@ fun GroupHubScreen(
                     // Nearby Wi-Fi Direct Devices (PRIMARY)
                     item {
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateContentSize(
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                ),
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)
+                            ),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
                             Column(
@@ -490,10 +602,27 @@ fun GroupHubScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = stringResource(R.string.hub_nearby_direct_title, state.wifiDirect.discoveredPeers.size),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.secondaryContainer,
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    Icons.Rounded.Bolt,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = stringResource(R.string.hub_nearby_direct_title, state.wifiDirect.discoveredPeers.size),
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
                                     TextButton(onClick = onDiscoverWifiDirect) {
                                         Text(stringResource(R.string.hub_scan_nearby))
                                     }
@@ -672,24 +801,59 @@ fun GroupHubScreen(
                     // 1. Active Group Header Card with Large Centered Scannable QR
                     item {
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateContentSize(
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                ),
+                            shape = RoundedCornerShape(22.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                            ),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f),
+                                                MaterialTheme.colorScheme.surface
+                                            )
+                                        )
+                                    )
+                                    .padding(16.dp)
+                            ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = if (state.role == GroupRole.HOST) {
-                                                stringResource(R.string.hub_connected_host, state.groupName)
-                                            } else {
-                                                stringResource(R.string.hub_connected_member, state.groupName)
-                                            },
-                                            style = MaterialTheme.typography.titleLarge
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(10.dp)
+                                                    .clip(CircleShape)
+                                                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = pulseAlpha))
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = if (state.role == GroupRole.HOST) {
+                                                    stringResource(R.string.hub_connected_host, state.groupName)
+                                                } else {
+                                                    stringResource(R.string.hub_connected_member, state.groupName)
+                                                },
+                                                style = MaterialTheme.typography.titleLarge,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             text = "${state.hostIp}:${state.hostPort}",
@@ -846,20 +1010,45 @@ fun GroupHubScreen(
 
                     // 2. Pending Join Requests Banner (Always visible to Host regardless of active tab)
                     if (state.role == GroupRole.HOST && state.pendingRequests.isNotEmpty()) {
-                        item {
+                        item(key = "pending_join_requests") {
+                            val borderTint by animateColorAsState(
+                                targetValue = if (highlightJoinRequests) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.45f)
+                                },
+                                label = "join_req_border"
+                            )
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .animateContentSize(),
+                                    .animateContentSize(
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                    ),
+                                shape = RoundedCornerShape(20.dp),
+                                border = BorderStroke(if (highlightJoinRequests) 2.dp else 1.dp, borderTint),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(
+                                        alpha = if (highlightJoinRequests) 0.72f else 0.48f
+                                    )
                                 )
                             ) {
                                 Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.hub_pending_requests, state.pendingRequests.size),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Rounded.NotificationsActive,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(R.string.hub_pending_requests, state.pendingRequests.size),
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.height(8.dp))
                                     state.pendingRequests.forEach { req ->
                                         Row(
@@ -902,24 +1091,38 @@ fun GroupHubScreen(
                         }
                     }
 
-                    // 3. Clean Workspace Tabs: Files | Peers | Chat
+                    // 3. Clean Workspace Tabs with Modern Icons: Files | Peers | Chat
                     item {
-                        TabRow(selectedTabIndex = activeGroupTab) {
-                            Tab(
-                                selected = activeGroupTab == 0,
-                                onClick = { activeGroupTab = 0 },
-                                text = { Text("${stringResource(R.string.hub_tab_files)} (${state.receivedFiles.size + state.sharedItems.size})") }
-                            )
-                            Tab(
-                                selected = activeGroupTab == 1,
-                                onClick = { activeGroupTab = 1 },
-                                text = { Text("${stringResource(R.string.hub_tab_peers)} (${state.peers.size})") }
-                            )
-                            Tab(
-                                selected = activeGroupTab == 2,
-                                onClick = { activeGroupTab = 2 },
-                                text = { Text("${stringResource(R.string.hub_tab_chat)} (${state.chatMessages.size})") }
-                            )
+                        val filesBadgeCount = if (state.autoReceiveFiles) {
+                            state.receivedFiles.size + state.activeTransfers.size
+                        } else {
+                            state.receivedFiles.size + state.sharedItems.size
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 2.dp
+                        ) {
+                            TabRow(selectedTabIndex = activeGroupTab) {
+                                Tab(
+                                    selected = activeGroupTab == 0,
+                                    onClick = { activeGroupTab = 0 },
+                                    icon = { Icon(Icons.Rounded.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                    text = { Text("${stringResource(R.string.hub_tab_files)} ($filesBadgeCount)", maxLines = 1) }
+                                )
+                                Tab(
+                                    selected = activeGroupTab == 1,
+                                    onClick = { activeGroupTab = 1 },
+                                    icon = { Icon(Icons.Rounded.Devices, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                    text = { Text("${stringResource(R.string.hub_tab_peers)} (${state.peers.size})", maxLines = 1) }
+                                )
+                                Tab(
+                                    selected = activeGroupTab == 2,
+                                    onClick = { activeGroupTab = 2 },
+                                    icon = { Icon(Icons.Rounded.Forum, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                    text = { Text("${stringResource(R.string.hub_tab_chat)} (${state.chatMessages.size})", maxLines = 1) }
+                                )
+                            }
                         }
                     }
 
@@ -989,10 +1192,14 @@ fun GroupHubScreen(
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                                 ) {
                                     Column(modifier = Modifier.padding(16.dp)) {
-                                        Text(
-                                            text = stringResource(R.string.hub_active_transfers, state.activeTransfers.size),
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Rounded.SwapVert, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = stringResource(R.string.hub_active_transfers, state.activeTransfers.size),
+                                                style = MaterialTheme.typography.titleMedium
+                                            )
+                                        }
                                         Spacer(modifier = Modifier.height(10.dp))
                                         state.activeTransfers.forEach { t ->
                                             val remainingBytes = (t.totalBytes - t.bytesTransferred).coerceAtLeast(0L)
@@ -1043,14 +1250,26 @@ fun GroupHubScreen(
                         // Received Files with Complete In-App Controls
                         item {
                             Card(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .animateContentSize(
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                    ),
+                                shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                             ) {
                                 Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.hub_received_files_title, state.receivedFiles.size),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.DownloadDone, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(R.string.hub_received_files_title, state.receivedFiles.size),
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.height(8.dp))
                                     if (state.receivedFiles.isEmpty()) {
                                         Text(
@@ -1103,67 +1322,76 @@ fun GroupHubScreen(
                             }
                         }
 
-                        // Live Shared Group Tray
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.hub_shared_tray, state.sharedItems.size),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    if (state.sharedItems.isEmpty()) {
-                                        Text(
-                                            text = stringResource(R.string.hub_shared_tray_empty),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    } else {
-                                        state.sharedItems.forEach { item ->
-                                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 10.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                CategoryBadge(category = item.category)
-                                                Spacer(modifier = Modifier.width(12.dp))
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        text = item.fileName,
-                                                        style = MaterialTheme.typography.bodyLarge,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    Text(
-                                                        text = "${Formatters.formatBytes(item.fileSize)} • ${item.ownerDeviceName}",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-                                                IconButton(
-                                                    onClick = { onDownloadItem(item, false) },
-                                                    modifier = Modifier.size(48.dp)
+                        // Manual Shared Group Tray (shown only when autoReceiveFiles is disabled to avoid duplicate entries during instant transfer)
+                        if (!state.autoReceiveFiles) {
+                            item {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .animateContentSize(),
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Rounded.Sync, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = stringResource(R.string.hub_shared_tray, state.sharedItems.size),
+                                                style = MaterialTheme.typography.titleMedium
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        if (state.sharedItems.isEmpty()) {
+                                            Text(
+                                                text = stringResource(R.string.hub_shared_tray_empty),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        } else {
+                                            state.sharedItems.forEach { item ->
+                                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    Icon(
-                                                        Icons.Rounded.Download,
-                                                        contentDescription = stringResource(R.string.hub_download),
-                                                        tint = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
-                                                IconButton(
-                                                    onClick = { onDownloadItem(item, true) },
-                                                    modifier = Modifier.size(48.dp)
-                                                ) {
-                                                    Icon(
-                                                        Icons.Rounded.Lock,
-                                                        contentDescription = stringResource(R.string.hub_download_vault),
-                                                        tint = MaterialTheme.colorScheme.tertiary
-                                                    )
+                                                    CategoryBadge(category = item.category)
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = item.fileName,
+                                                            style = MaterialTheme.typography.bodyLarge,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Text(
+                                                            text = "${Formatters.formatBytes(item.fileSize)} • ${item.ownerDeviceName}",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { onDownloadItem(item, false) },
+                                                        modifier = Modifier.size(48.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Rounded.Download,
+                                                            contentDescription = stringResource(R.string.hub_download),
+                                                            tint = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { onDownloadItem(item, true) },
+                                                        modifier = Modifier.size(48.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Rounded.Lock,
+                                                            contentDescription = stringResource(R.string.hub_download_vault),
+                                                            tint = MaterialTheme.colorScheme.tertiary
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -1269,68 +1497,121 @@ fun GroupHubScreen(
                             }
                         }
                     } else {
-                        // Encrypted Chat & Live Clipboard Sync
-                        item {
+                        // Encrypted Chat & Live Clipboard Sync (Messages list; composer is sticky below LazyColumn above keyboard)
+                        item(key = "chat_messages_card") {
                             Card(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .animateContentSize(),
+                                shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                             ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = stringResource(R.string.hub_chat_title),
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    state.chatMessages.takeLast(12).forEach { msg ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = msg.senderName,
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                                Text(
-                                                    text = msg.text,
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                            }
-                                            IconButton(onClick = {
-                                                clipboard.setText(AnnotatedString(msg.text))
-                                            }) {
-                                                Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.hub_copy))
-                                            }
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        OutlinedTextField(
-                                            value = chatInput,
-                                            onValueChange = { chatInput = it },
-                                            placeholder = { Text(stringResource(R.string.hub_chat_hint)) },
-                                            modifier = Modifier.weight(1f),
-                                            singleLine = true
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.Forum, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(R.string.hub_chat_title),
+                                            style = MaterialTheme.typography.titleMedium
                                         )
-                                        Button(
-                                            onClick = {
-                                                onSendChat(chatInput)
-                                                chatInput = ""
-                                            },
-                                            modifier = Modifier.height(52.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.Send, contentDescription = stringResource(R.string.hub_send))
+                                    }
+                                    if (state.chatMessages.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.hub_chat_hint),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        state.chatMessages.takeLast(30).forEach { msg ->
+                                            Surface(
+                                                shape = RoundedCornerShape(14.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = msg.senderName,
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        Text(
+                                                            text = msg.text,
+                                                            style = MaterialTheme.typography.bodyMedium
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { clipboard.setText(AnnotatedString(msg.text)) },
+                                                        modifier = Modifier.size(48.dp)
+                                                    ) {
+                                                        Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.hub_copy))
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            }
+
+            // Sticky Chat Input Bar anchored directly above open soft keyboard
+            AnimatedVisibility(visible = isGroupActive && activeGroupTab == 2) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = chatInput,
+                            onValueChange = { chatInput = it },
+                            placeholder = { Text(stringResource(R.string.hub_chat_hint)) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("chat_input_field"),
+                            maxLines = 3,
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        Button(
+                            onClick = {
+                                if (chatInput.isNotBlank()) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onSendChat(chatInput)
+                                    chatInput = ""
+                                }
+                            },
+                            enabled = chatInput.isNotBlank(),
+                            modifier = Modifier
+                                .height(50.dp)
+                                .testTag("chat_send_button"),
+                            shape = RoundedCornerShape(24.dp)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = stringResource(R.string.hub_send)
+                            )
                         }
                     }
                 }
@@ -1497,7 +1778,8 @@ fun GroupHubScreen(
                         parsed.hostIp,
                         parsed.hostPort,
                         parsed.groupName,
-                        ""
+                        "",
+                        parsed.hostMac
                     )
                 }
             }
@@ -1527,7 +1809,8 @@ fun GroupHubScreen(
                         parsed.hostIp,
                         parsed.hostPort,
                         parsed.groupName,
-                        pin.trim()
+                        pin.trim(),
+                        parsed.hostMac
                     )
                 }) {
                     Text(stringResource(R.string.hub_connect))

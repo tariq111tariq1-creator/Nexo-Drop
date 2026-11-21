@@ -60,7 +60,7 @@ class ExampleRobolectricTest {
         val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
         val vm = MainViewModel(app)
 
-        val jsonQr = """{"t":"nx_direct","ssid":"DIRECT-xy-Nexo","pass":"pass1234","ip":"192.168.49.1","port":45892,"name":"MyGroup","pin":true}"""
+        val jsonQr = """{"t":"nx_direct","ssid":"DIRECT-xy-Nexo","pass":"pass1234","ip":"192.168.49.1","port":45892,"name":"MyGroup","pin":true,"mac":"aa:bb:cc:dd:ee:ff","freq":5180}"""
         val parsedJson = vm.parseScannedQr(jsonQr)
         assertEquals("DIRECT-xy-Nexo", parsedJson?.ssid)
         assertEquals("pass1234", parsedJson?.passphrase)
@@ -68,6 +68,13 @@ class ExampleRobolectricTest {
         assertEquals(45892, parsedJson?.hostPort)
         assertEquals("MyGroup", parsedJson?.groupName)
         assertEquals(true, parsedJson?.hasPin)
+        assertEquals("aa:bb:cc:dd:ee:ff", parsedJson?.hostMac)
+        assertEquals(5180, parsedJson?.frequency)
+
+        assertEquals(0, vm.joinApprovalFocusTick.value)
+        vm.triggerFocusJoinApproval()
+        assertEquals(1, vm.joinApprovalFocusTick.value)
+        assertEquals("com.example.ACTION_OPEN_JOIN_REQUESTS", com.example.p2p.TransferForegroundService.ACTION_OPEN_JOIN_REQUESTS)
 
         val wifiQr = "WIFI:T:WPA;S:AndroidShare_12;P:secret99;;"
         val parsedWifi = vm.parseScannedQr(wifiQr)

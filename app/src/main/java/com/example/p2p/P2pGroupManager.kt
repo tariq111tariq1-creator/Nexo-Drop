@@ -152,13 +152,20 @@ class P2pGroupManager(
         scope.launch {
             discoveryManager.events.collect { event ->
                 when (event) {
+                    is DirectDiscoveryEvent.WifiDirectBecameGroupOwner -> {
+                        val st = _state.value
+                        if (st.role != GroupRole.HOST && (st.phase == ConnectionPhase.IDLE || st.phase == ConnectionPhase.CONNECTING)) {
+                            becomeHostForExistingWifiDirectGroup(event.ownerIp, event.ssid, event.passphrase)
+                        }
+                    }
                     is DirectDiscoveryEvent.WifiDirectCredentialsReady -> {
                         val effectiveIp = event.ownerIp.ifBlank { discoveryManager.getPrimaryDirectIp() }
                         if (_state.value.role == GroupRole.HOST) {
                             updateHostNetworkInfo(
                                 hostIp = effectiveIp,
                                 ssid = event.ssid,
-                                pass = event.passphrase
+                                pass = event.passphrase,
+                                hostMac = event.hostMac
                             )
                         }
                     }
@@ -168,17 +175,21 @@ class P2pGroupManager(
                             updateHostNetworkInfo(
                                 hostIp = effectiveIp,
                                 ssid = event.ssid,
-                                pass = event.passphrase
+                                pass = event.passphrase,
+                                hostMac = ""
                             )
                         }
                     }
                     is DirectDiscoveryEvent.WifiDirectGroupFormedAsClient -> {
-                        val pending = pendingDirectJoin
-                        val targetName = pending?.groupName ?: "Direct Group"
-                        val targetPin = pending?.pin ?: ""
-                        val targetPort = pending?.port ?: PRIMARY_P2P_PORT
-                        delay(450)
-                        joinGroup(event.ownerIp, targetPort, targetName, targetPin)
+                        val st = _state.value
+                        if (st.role != GroupRole.HOST && (st.phase == ConnectionPhase.IDLE || st.phase == ConnectionPhase.CONNECTING)) {
+                            val pending = pendingDirectJoin
+                            val targetName = pending?.groupName ?: st.groupName.ifBlank { "Direct Group" }
+                            val targetPin = pending?.pin ?: ""
+                            val targetPort = pending?.port ?: PRIMARY_P2P_PORT
+                            delay(550)
+                            joinGroup(event.ownerIp, targetPort, targetName, targetPin, maxConnectAttempts = 12)
+                        }
                     }
                     is DirectDiscoveryEvent.SpecifierNetworkReady -> {
                         val pending = pendingDirectJoin
@@ -187,12 +198,21 @@ class P2pGroupManager(
                         val targetName = pending?.groupName ?: "Direct Group"
                         val targetPin = pending?.pin ?: ""
                         delay(350)
-                        joinGroup(targetIp, targetPort, targetName, targetPin)
+                        joinGroup(targetIp, targetPort, targetName, targetPin, maxConnectAttempts = 8)
                     }
                     is DirectDiscoveryEvent.SpecifierNetworkFailed -> {
                         _state.value = _state.value.copy(
                             phase = ConnectionPhase.IDLE,
                             role = GroupRole.NONE,
+                            connectionStep = 0,
+                            lastError = event.reason
+                        )
+                    }
+                    is DirectDiscoveryEvent.WifiDirectPairFailed -> {
+                        _state.value = _state.value.copy(
+                            phase = ConnectionPhase.IDLE,
+                            role = GroupRole.NONE,
+                            connectionStep = 0,
                             lastError = event.reason
                         )
                     }
@@ -201,7 +221,64 @@ class P2pGroupManager(
         }
     }
 
-    private fun updateHostNetworkInfo(hostIp: String, ssid: String, pass: String) {
+    private suspend fun becomeHostForExistingWifiDirectGroup(ownerIp: String, ssid: String, passphrase: String) {
+        stopScanning()
+        val preserveAutoReceive = _state.value.autoReceiveFiles
+        val preserveLanMode = _state.value.localNetworkEnabled
+        closeOrLeaveGroup(keepDiscovery = true, resetToIdle = false)
+        val myId = preferences.ensureDeviceId()
+        myDeviceId = myId
+        val myName = currentSettings.deviceName
+        val groupId = UUID.randomUUID().toString().take(8)
+        val server = bindServerSocket()
+        hostServerSocket = server
+        val tcpPort = server.localPort
+        val directIp = ownerIp.ifBlank { discoveryManager.getPrimaryDirectIp() }
+        val cleanGroupName = "$myName's Group"
+        val hostPeer = GroupPeer(
+            deviceId = myId,
+            deviceName = myName,
+            ipAddress = directIp,
+            permission = PeerPermission.FULL_ACCESS,
+            keyFingerprint = "HOST",
+            isHost = true
+        )
+
+        _state.value = _state.value.copy(
+            phase = ConnectionPhase.HOSTING,
+            role = GroupRole.HOST,
+            groupId = groupId,
+            groupName = cleanGroupName,
+            hostIp = directIp,
+            hostPort = tcpPort,
+            hasPin = false,
+            groupPin = "",
+            keyFingerprint = "ECDH-P256",
+            autoApprove = true,
+            autoReceiveFiles = preserveAutoReceive,
+            connectionStep = 4,
+            webShareUrl = "",
+            directQrPayload = buildDirectQrPayload(ssid, passphrase, directIp, tcpPort, cleanGroupName, false),
+            localNetworkEnabled = preserveLanMode,
+            myPermission = PeerPermission.FULL_ACCESS,
+            peers = listOf(hostPeer),
+            pendingRequests = emptyList(),
+            sharedItems = emptyList(),
+            receivedFiles = emptyList(),
+            chatMessages = emptyList(),
+            lastError = null
+        )
+
+        TransferForegroundService.start(context, cleanGroupName, tcpPort)
+        hostAcceptJob = scope.launch {
+            while (isActive && !server.isClosed) {
+                val sock = runCatching { server.accept() }.getOrNull() ?: break
+                launch { handleIncomingSocketOnHost(sock) }
+            }
+        }
+    }
+
+    private fun updateHostNetworkInfo(hostIp: String, ssid: String, pass: String, hostMac: String = "") {
         val st = _state.value
         val qr = buildDirectQrPayload(
             ssid = ssid,
@@ -209,7 +286,8 @@ class P2pGroupManager(
             ip = hostIp,
             port = st.hostPort,
             groupName = st.groupName,
-            hasPin = st.hasPin
+            hasPin = st.hasPin,
+            hostMac = hostMac
         )
         val webUrl = if (hostWebShareEnabled && hostWebSharePort > 0) {
             "http://$hostIp:$hostWebSharePort"
@@ -227,7 +305,8 @@ class P2pGroupManager(
         ip: String,
         port: Int,
         groupName: String,
-        hasPin: Boolean
+        hasPin: Boolean,
+        hostMac: String = ""
     ): String {
         return JSONObject().apply {
             put("t", "nx_direct")
@@ -237,6 +316,7 @@ class P2pGroupManager(
             put("port", port)
             put("name", groupName)
             put("pin", hasPin)
+            if (hostMac.isNotBlank()) put("mac", hostMac)
         }.toString()
     }
 
@@ -322,6 +402,7 @@ class P2pGroupManager(
     }
 
     fun connectToDirectPeer(peer: WifiDirectPeer, pin: String = "") {
+        stopScanning()
         pendingDirectJoin = PendingDirectJoin(
             groupName = peer.serviceGroupName.ifBlank { peer.deviceName },
             pin = pin,
@@ -334,7 +415,7 @@ class P2pGroupManager(
             groupName = peer.serviceGroupName.ifBlank { peer.deviceName },
             lastError = null
         )
-        discoveryManager.connectToWifiDirectPeer(peer.deviceAddress)
+        discoveryManager.connectToWifiDirectPeer(peer.deviceAddress, preferPeerAsOwner = peer.isNexoService)
     }
 
     fun joinViaDirectQrOrCredentials(
@@ -343,7 +424,8 @@ class P2pGroupManager(
         hostIp: String,
         hostPort: Int,
         groupName: String,
-        pin: String
+        pin: String,
+        hostMac: String = ""
     ) {
         stopScanning()
         if (ssid.isNotBlank()) {
@@ -362,7 +444,7 @@ class P2pGroupManager(
                 groupName = groupName,
                 lastError = null
             )
-            discoveryManager.connectDirectByQrCredentials(ssid, passphrase)
+            discoveryManager.connectDirectByQrCredentials(ssid, passphrase, hostMac)
         } else if (hostIp.isNotBlank()) {
             joinGroup(hostIp, hostPort.takeIf { it > 0 } ?: PRIMARY_P2P_PORT, groupName, pin)
         }
@@ -830,7 +912,7 @@ class P2pGroupManager(
     /**
      * Join an existing Host group by IP, Port, and optional PIN.
      */
-    fun joinGroup(hostIp: String, hostPort: Int, groupName: String, pin: String) {
+    fun joinGroup(hostIp: String, hostPort: Int, groupName: String, pin: String, maxConnectAttempts: Int = 5) {
         stopScanning()
         _state.value = _state.value.copy(
             phase = ConnectionPhase.CONNECTING,
@@ -860,7 +942,7 @@ class P2pGroupManager(
             )
 
             try {
-                val sock = openTcpSocket(hostIp, hostPort, maxAttempts = 5)
+                val sock = openTcpSocket(hostIp, hostPort, maxAttempts = maxConnectAttempts)
                 clientControlSocket = sock
 
                 val dis = DataInputStream(BufferedInputStream(sock.getInputStream()))

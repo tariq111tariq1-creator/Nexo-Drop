@@ -28,6 +28,7 @@ class TransferForegroundService : Service() {
         private const val EXTRA_FILE_NAME = "file_name"
         private const val EXTRA_PERCENT = "percent"
         private const val EXTRA_SPEED = "speed"
+        const val ACTION_OPEN_JOIN_REQUESTS = "com.example.ACTION_OPEN_JOIN_REQUESTS"
 
         fun start(context: Context, groupName: String, port: Int) {
             val intent = Intent(context, TransferForegroundService::class.java).apply {
@@ -55,13 +56,24 @@ class TransferForegroundService : Service() {
             nm.notify(ONGOING_ID, notification)
         }
 
-        fun notifyAlert(context: Context, title: String, body: String, silent: Boolean) {
+        fun notifyAlert(
+            context: Context,
+            title: String,
+            body: String,
+            silent: Boolean,
+            targetAction: String? = null
+        ) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             ensureChannels(context, nm)
+            val launchIntent = Intent(context, MainActivity::class.java).apply {
+                if (targetAction != null) action = targetAction
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val reqCode = if (targetAction == ACTION_OPEN_JOIN_REQUESTS) 101 else 0
             val openIntent = PendingIntent.getActivity(
                 context,
-                0,
-                Intent(context, MainActivity::class.java),
+                reqCode,
+                launchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS)

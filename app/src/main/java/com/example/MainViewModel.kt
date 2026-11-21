@@ -104,6 +104,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _backupState = MutableStateFlow(BackupUiState())
     val backupState: StateFlow<BackupUiState> = _backupState.asStateFlow()
 
+    private val _joinApprovalFocusTick = MutableStateFlow(0)
+    val joinApprovalFocusTick: StateFlow<Int> = _joinApprovalFocusTick.asStateFlow()
+
+    fun triggerFocusJoinApproval() {
+        _joinApprovalFocusTick.value += 1
+    }
+
     init {
         viewModelScope.launch {
             preferences.ensureDeviceId()
@@ -123,7 +130,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 app,
                                 app.getString(R.string.notif_join_request_title, event.request.deviceName),
                                 app.getString(R.string.notif_join_request_body),
-                                curSettings.silentNotifications
+                                curSettings.silentNotifications,
+                                targetAction = TransferForegroundService.ACTION_OPEN_JOIN_REQUESTS
                             )
                         }
                     }
@@ -209,9 +217,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         hostIp: String,
         hostPort: Int,
         groupName: String,
-        pin: String
+        pin: String,
+        hostMac: String = ""
     ) {
-        p2pManager.joinViaDirectQrOrCredentials(ssid, passphrase, hostIp, hostPort, groupName, pin)
+        p2pManager.joinViaDirectQrOrCredentials(ssid, passphrase, hostIp, hostPort, groupName, pin, hostMac)
     }
 
     fun parseScannedQr(raw: String): ScannedQrResult? {
@@ -226,7 +235,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         hostIp = j.optString("ip", "192.168.49.1"),
                         hostPort = j.optInt("port", com.example.p2p.P2pGroupManager.PRIMARY_P2P_PORT),
                         groupName = j.optString("name", "Direct Group"),
-                        hasPin = j.optBoolean("pin", false)
+                        hasPin = j.optBoolean("pin", false),
+                        frequency = j.optInt("freq", 0),
+                        hostMac = j.optString("mac", "")
                     )
                 } else null
             }.getOrNull()

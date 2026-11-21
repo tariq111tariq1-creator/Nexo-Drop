@@ -45,11 +45,19 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 
 sealed class DirectDiscoveryEvent {
+    data class WifiDirectBecameGroupOwner(val ownerIp: String, val ssid: String, val passphrase: String) : DirectDiscoveryEvent()
     data class WifiDirectGroupFormedAsClient(val ownerIp: String) : DirectDiscoveryEvent()
-    data class WifiDirectCredentialsReady(val ssid: String, val passphrase: String, val ownerIp: String) : DirectDiscoveryEvent()
+    data class WifiDirectCredentialsReady(
+        val ssid: String,
+        val passphrase: String,
+        val ownerIp: String,
+        val frequency: Int = 0,
+        val hostMac: String = ""
+    ) : DirectDiscoveryEvent()
     data class HotspotCredentialsReady(val ssid: String, val passphrase: String, val ip: String) : DirectDiscoveryEvent()
     data class SpecifierNetworkReady(val network: Network) : DirectDiscoveryEvent()
     data class SpecifierNetworkFailed(val reason: String) : DirectDiscoveryEvent()
+    data class WifiDirectPairFailed(val reason: String) : DirectDiscoveryEvent()
 }
 
 /**
@@ -152,10 +160,10 @@ class DiscoveryManager(
                                 groupActive = true,
                                 groupOwnerIp = ownerIp
                             )
+                            isExpectingClientP2pAutoConnect = false
                             if (info.isGroupOwner) {
-                                fetchGroupCredentialsWithRetry(ownerIp)
-                            } else if (isExpectingClientP2pAutoConnect) {
-                                isExpectingClientP2pAutoConnect = false
+                                fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                            } else {
                                 _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
                             }
                         }
@@ -166,7 +174,7 @@ class DiscoveryManager(
     }
 
     @SuppressLint("MissingPermission")
-    private fun fetchGroupCredentialsWithRetry(ownerIp: String) {
+    private fun fetchGroupCredentialsWithRetry(ownerIp: String, emitOwnerFormed: Boolean = false) {
         val manager = p2pManager ?: return
         val channel = p2pChannel ?: return
         scope.launch {
@@ -179,6 +187,10 @@ class DiscoveryManager(
                             resolved = true
                             val ssid = group.networkName ?: ""
                             val pass = group.passphrase ?: ""
+                            val freq = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) group.frequency else 0
+                            val mac = group.owner?.deviceAddress
+                                ?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" }
+                                ?: ""
                             _wifiDirectState.value = _wifiDirectState.value.copy(
                                 groupActive = true,
                                 ssid = ssid,
@@ -186,11 +198,17 @@ class DiscoveryManager(
                                 groupOwnerIp = ownerIp,
                                 statusMessage = "Wi-Fi Direct: $ssid"
                             )
-                            _events.tryEmit(DirectDiscoveryEvent.WifiDirectCredentialsReady(ssid, pass, ownerIp))
+                            _events.tryEmit(DirectDiscoveryEvent.WifiDirectCredentialsReady(ssid, pass, ownerIp, freq, mac))
+                            if (emitOwnerFormed) {
+                                _events.tryEmit(DirectDiscoveryEvent.WifiDirectBecameGroupOwner(ownerIp, ssid, pass))
+                            }
                         }
                     }
                 }
                 delay(650)
+            }
+            if (emitOwnerFormed && !resolved) {
+                _events.tryEmit(DirectDiscoveryEvent.WifiDirectBecameGroupOwner(ownerIp, "", ""))
             }
         }
     }
@@ -505,105 +523,201 @@ class DiscoveryManager(
     }
 
     @SuppressLint("MissingPermission")
-    fun connectToWifiDirectPeer(deviceAddress: String) {
+    fun connectToWifiDirectPeer(deviceAddress: String, preferPeerAsOwner: Boolean = true) {
+        stopDirectPeerDiscovery()
         val manager = p2pManager ?: return
         ensureP2pInitialized()
         val channel = p2pChannel ?: return
         isExpectingClientP2pAutoConnect = true
+        runCatching { manager.cancelConnect(channel, null) }
+        runCatching { manager.clearServiceRequests(channel, null) }
+
         val config = WifiP2pConfig().apply {
             this.deviceAddress = deviceAddress
             wps.setup = WpsInfo.PBC
-            groupOwnerIntent = 0 // Prefer the existing Host as Group Owner
+            groupOwnerIntent = if (preferPeerAsOwner) 1 else 6
         }
-        runCatching {
-            manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    _wifiDirectState.value = _wifiDirectState.value.copy(
-                        statusMessage = "Pairing via Wi-Fi Direct..."
-                    )
-                }
+        scope.launch {
+            delay(200)
+            runCatching {
+                manager.connect(channel, config, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        _wifiDirectState.value = _wifiDirectState.value.copy(
+                            statusMessage = "Pairing via Wi-Fi Direct..."
+                        )
+                    }
 
-                override fun onFailure(reason: Int) {
-                    isExpectingClientP2pAutoConnect = false
-                    _wifiDirectState.value = _wifiDirectState.value.copy(
-                        statusMessage = "Direct connect failed ($reason)"
-                    )
-                }
-            })
+                    override fun onFailure(reason: Int) {
+                        isExpectingClientP2pAutoConnect = false
+                        _wifiDirectState.value = _wifiDirectState.value.copy(
+                            statusMessage = "Direct connect failed ($reason)"
+                        )
+                        _events.tryEmit(DirectDiscoveryEvent.WifiDirectPairFailed("Wi-Fi Direct peer connect failed ($reason)"))
+                    }
+                })
+            }
         }
     }
 
     /**
      * Joins a Host's Wi-Fi Direct (DIRECT-...) or LocalOnlyHotspot SSID+Passphrase from QR.
-     * On Android 10+ (API 29+), uses native WifiP2pConfig.Builder(ssid, passphrase) first for DIRECT- groups
-     * to avoid unnecessary system Wi-Fi/Settings prompts, with automatic fallback to WifiNetworkSpecifier.
+     * For DIRECT- Wi-Fi Direct groups on Android 10+, connects strictly via WifiP2pManager
+     * (never auto-launching WifiNetworkSpecifier's system Settings chooser dialog).
+     * For LocalOnlyHotspot (non-DIRECT- SSID), uses WifiNetworkSpecifier directly.
      */
     @SuppressLint("MissingPermission")
-    fun connectDirectByQrCredentials(ssid: String, passphrase: String) {
+    fun connectDirectByQrCredentials(
+        ssid: String,
+        passphrase: String,
+        hostMac: String = ""
+    ) {
         stopDirectPeerDiscovery()
         val manager = p2pManager
         ensureP2pInitialized()
         val channel = p2pChannel
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            ssid.startsWith("DIRECT-", ignoreCase = true) &&
-            passphrase.length >= 8 &&
-            manager != null &&
-            channel != null &&
-            isWifiP2pEnabled
-        ) {
-            isExpectingClientP2pAutoConnect = true
-            runCatching { manager.cancelConnect(channel, null) }
-            runCatching { manager.clearServiceRequests(channel, null) }
+        if (ssid.startsWith("DIRECT-", ignoreCase = true)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                passphrase.length >= 8 &&
+                manager != null &&
+                channel != null &&
+                isWifiP2pEnabled
+            ) {
+                isExpectingClientP2pAutoConnect = true
+                runCatching { manager.cancelConnect(channel, null) }
+                runCatching { manager.clearServiceRequests(channel, null) }
 
-            val p2pConfig = WifiP2pConfig.Builder()
-                .setNetworkName(ssid)
-                .setPassphrase(passphrase)
-                .enablePersistentMode(false)
-                .build()
-
-            var fallbackTriggered = false
-            val timeoutJob = scope.launch {
-                delay(7_500L)
-                if (isExpectingClientP2pAutoConnect && !fallbackTriggered) {
-                    fallbackTriggered = true
-                    isExpectingClientP2pAutoConnect = false
-                    connectToDirectWifiNetwork(ssid, passphrase)
-                }
-            }
-
-            scope.launch {
-                delay(200)
-                runCatching {
-                    manager.connect(channel, p2pConfig, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() {
-                            _wifiDirectState.value = _wifiDirectState.value.copy(
-                                statusMessage = "Joining Wi-Fi Direct ($ssid)..."
-                            )
-                        }
-
-                        override fun onFailure(reason: Int) {
-                            timeoutJob.cancel()
-                            if (!fallbackTriggered) {
-                                fallbackTriggered = true
-                                isExpectingClientP2pAutoConnect = false
-                                connectToDirectWifiNetwork(ssid, passphrase)
-                            }
-                        }
-                    })
-                }.onFailure {
-                    timeoutJob.cancel()
-                    if (!fallbackTriggered) {
-                        fallbackTriggered = true
+                val timeoutJob = scope.launch {
+                    delay(14_000L)
+                    if (isExpectingClientP2pAutoConnect) {
                         isExpectingClientP2pAutoConnect = false
-                        connectToDirectWifiNetwork(ssid, passphrase)
+                        _events.tryEmit(
+                            DirectDiscoveryEvent.WifiDirectPairFailed(
+                                "Could not pair with '$ssid' over Wi-Fi Direct. Try tapping the nearby device directly or switch Host to Direct Hotspot."
+                            )
+                        )
                     }
                 }
+
+                scope.launch {
+                    delay(220)
+                    // Clear any stale P2P group before joining the Host's group
+                    runCatching {
+                        manager.requestGroupInfo(channel) { stale ->
+                            if (stale != null) {
+                                manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                                    override fun onSuccess() {
+                                        scope.launch {
+                                            delay(300)
+                                            connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
+                                        }
+                                    }
+                                    override fun onFailure(reason: Int) {
+                                        connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
+                                    }
+                                })
+                            } else {
+                                connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
+                            }
+                        }
+                    }.onFailure {
+                        connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
+                    }
+                }
+            } else {
+                _events.tryEmit(
+                    DirectDiscoveryEvent.WifiDirectPairFailed(
+                        "Wi-Fi Direct unavailable for '$ssid'. Switch Host to Direct Hotspot or connect via Nearby Peers."
+                    )
+                )
             }
             return
         }
 
+        // LocalOnlyHotspot (non-DIRECT- SoftAP): WifiNetworkSpecifier works cleanly
         connectToDirectWifiNetwork(ssid, passphrase)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectUsingDirectBuilder(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
+        ssid: String,
+        passphrase: String,
+        hostMac: String,
+        timeoutJob: Job
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val p2pConfig = WifiP2pConfig.Builder()
+            .setNetworkName(ssid)
+            .setPassphrase(passphrase)
+            .enablePersistentMode(false)
+            .build()
+
+        runCatching {
+            manager.connect(channel, p2pConfig, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    _wifiDirectState.value = _wifiDirectState.value.copy(
+                        statusMessage = "Joining Wi-Fi Direct ($ssid)..."
+                    )
+                }
+
+                override fun onFailure(reason: Int) {
+                    if (hostMac.isNotBlank()) {
+                        connectToWifiDirectPeerByMacFallback(manager, channel, hostMac, timeoutJob)
+                    } else {
+                        timeoutJob.cancel()
+                        isExpectingClientP2pAutoConnect = false
+                        _events.tryEmit(
+                            DirectDiscoveryEvent.WifiDirectPairFailed(
+                                "Wi-Fi Direct QR join failed ($reason). Try tapping the device in Nearby Devices or use Direct Hotspot."
+                            )
+                        )
+                    }
+                }
+            })
+        }.onFailure { err ->
+            timeoutJob.cancel()
+            isExpectingClientP2pAutoConnect = false
+            _events.tryEmit(
+                DirectDiscoveryEvent.WifiDirectPairFailed(err.localizedMessage ?: "Wi-Fi Direct QR join failed")
+            )
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectToWifiDirectPeerByMacFallback(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
+        hostMac: String,
+        timeoutJob: Job
+    ) {
+        val macCfg = WifiP2pConfig().apply {
+            deviceAddress = hostMac
+            wps.setup = WpsInfo.PBC
+            groupOwnerIntent = 0
+        }
+        runCatching {
+            manager.discoverPeers(channel, null)
+            scope.launch {
+                delay(450)
+                manager.connect(channel, macCfg, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        _wifiDirectState.value = _wifiDirectState.value.copy(
+                            statusMessage = "Pairing via P2P MAC..."
+                        )
+                    }
+
+                    override fun onFailure(reason: Int) {
+                        timeoutJob.cancel()
+                        isExpectingClientP2pAutoConnect = false
+                        _events.tryEmit(
+                            DirectDiscoveryEvent.WifiDirectPairFailed("Wi-Fi Direct peer connect failed ($reason)")
+                        )
+                    }
+                })
+            }
+        }
     }
 
     /**

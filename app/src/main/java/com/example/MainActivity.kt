@@ -1,15 +1,19 @@
 package com.example
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -56,6 +60,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.data.AppPreferences
 import com.example.p2p.ConnectionPhase
+import com.example.p2p.TransferForegroundService
 import com.example.ui.screens.BackupScreen
 import com.example.ui.screens.ExplorerScreen
 import com.example.ui.screens.GroupHubScreen
@@ -90,9 +95,22 @@ class MainActivity : FragmentActivity() {
         super.attachBaseContext(LocaleHelper.wrapContext(newBase, langCode))
     }
 
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.action == TransferForegroundService.ACTION_OPEN_JOIN_REQUESTS) {
+            viewModel.triggerFocusJoinApproval()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleNotificationIntent(intent)
 
         setContent {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -108,6 +126,7 @@ class MainActivity : FragmentActivity() {
             val vaultUnlocked by viewModel.vaultUnlocked.collectAsStateWithLifecycle()
             val permissions by viewModel.permissionSnapshot.collectAsStateWithLifecycle()
             val backupState by viewModel.backupState.collectAsStateWithLifecycle()
+            val joinApprovalFocusTick by viewModel.joinApprovalFocusTick.collectAsStateWithLifecycle()
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -156,7 +175,8 @@ class MainActivity : FragmentActivity() {
                             currentFolderFiles = currentFolderFiles,
                             vaultUnlocked = vaultUnlocked,
                             permissions = permissions,
-                            backupState = backupState
+                            backupState = backupState,
+                            joinApprovalFocusTick = joinApprovalFocusTick
                         )
                     }
                 }
@@ -170,6 +190,7 @@ class MainActivity : FragmentActivity() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MainAdaptiveScaffold(
     viewModel: MainViewModel,
@@ -186,7 +207,8 @@ private fun MainAdaptiveScaffold(
     currentFolderFiles: List<com.example.data.DeviceFileItem>,
     vaultUnlocked: Boolean,
     permissions: com.example.util.PermissionSnapshot,
-    backupState: BackupUiState
+    backupState: BackupUiState,
+    joinApprovalFocusTick: Int
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -212,12 +234,20 @@ private fun MainAdaptiveScaffold(
         }
     }
 
+    LaunchedEffect(joinApprovalFocusTick) {
+        if (joinApprovalFocusTick > 0) {
+            navigateTab(ROUTE_GROUP)
+        }
+    }
+
     val isGroupActive = groupState.phase == ConnectionPhase.HOSTING || groupState.phase == ConnectionPhase.CONNECTED
     val openBackupCenter: () -> Unit = {
         navController.navigate(ROUTE_BACKUP) {
             launchSingleTop = true
         }
     }
+
+    val isImeVisible = WindowInsets.isImeVisible
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 600.dp
@@ -228,7 +258,7 @@ private fun MainAdaptiveScaffold(
             contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                if (!useRail) {
+                if (!useRail && !isImeVisible) {
                     NavigationBar(
                         windowInsets = WindowInsets.navigationBars
                     ) {
@@ -255,6 +285,7 @@ private fun MainAdaptiveScaffold(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
             ) {
                 if (useRail) {
                     NavigationRail(
@@ -289,6 +320,7 @@ private fun MainAdaptiveScaffold(
                                 state = groupState,
                                 permissions = permissions,
                                 isWideScreen = useRail,
+                                joinApprovalFocusTick = joinApprovalFocusTick,
                                 onRefreshPermissions = { viewModel.refreshPermissions() },
                                 onStartScan = { viewModel.startDiscovery() },
                                 onStopScan = { viewModel.stopDiscovery() },
@@ -304,8 +336,8 @@ private fun MainAdaptiveScaffold(
                                     viewModel.setAutoReceiveFiles(enabled)
                                 },
                                 onParseQr = { raw -> viewModel.parseScannedQr(raw) },
-                                onJoinViaDirectCredentials = { ssid, pass, ip, port, name, pin ->
-                                    viewModel.joinViaDirectCredentials(ssid, pass, ip, port, name, pin)
+                                onJoinViaDirectCredentials = { ssid, pass, ip, port, name, pin, hostMac ->
+                                    viewModel.joinViaDirectCredentials(ssid, pass, ip, port, name, pin, hostMac)
                                 },
                                 onCreateGroup = { name, pin, auto, web ->
                                     viewModel.createGroup(name, pin, auto, web)

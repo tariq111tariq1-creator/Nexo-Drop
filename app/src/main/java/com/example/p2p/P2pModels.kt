@@ -177,5 +177,7 @@ data class ScannedQrResult(
     val hostIp: String,
     val hostPort: Int,
     val groupName: String,
-    val hasPin: Boolean
+    val hasPin: Boolean,
+    val frequency: Int = 0,
+    val hostMac: String = ""
 )
