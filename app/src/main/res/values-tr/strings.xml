@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">Gönderildi — bekleniyor</string>
     <string name="hub_resend">Tekrar Gönder</string>
     <string name="hub_paste_send">Yapıştır &amp; Gönder</string>
+    <string name="account_section_title">Google Hesabı &amp; Bulut Senkronizasyonu (İsteğe Bağlı)</string>
+    <string name="account_optional_hint">İsteğe bağlı — çevrimdışı aktarım, kasa ve yedekler giriş yapmadan çalışır.</string>
+    <string name="account_sign_in_google">Google ile Giriş Yap</string>
+    <string name="account_sign_out">Çıkış Yap</string>
+    <string name="account_sync_now">Şimdi Senkronize Et</string>
+    <string name="account_apply_prefs">Bulut Tercihlerini Yükle</string>
+    <string name="account_linked_devices">Bağlı Cihazlar (%1$d)</string>
+    <string name="account_this_device_badge">Bu Cihaz</string>
+    <string name="account_synced_transfers_count">Bulut aktarımları: %1$d</string>
+    <string name="account_remove_device">Cihazı kaldır</string>
+    <string name="account_signed_in_msg">Google ile giriş yapıldı</string>
+    <string name="account_sign_in_failed">Google girişi başarısız</string>
+    <string name="account_signed_out_msg">Çıkış yapıldı</string>
+    <string name="account_sync_done">Bulut senkronizasyonu tamamlandı</string>
+    <string name="account_sync_failed">Bulut senkronizasyonu başarısız</string>
+    <string name="account_prefs_applied">Bulut tercihleri uygulandı</string>
+    <string name="hub_view_group">Grubu Gör</string>
+    <string name="hub_global_join_alert">%1$s grubuna katılmak istiyor</string>
 </resources>

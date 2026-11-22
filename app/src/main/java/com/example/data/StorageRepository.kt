@@ -299,6 +299,82 @@ class StorageRepository(
         }
     }
 
+    /**
+     * Opens a stream positioned at [offset] bytes using O(1) FileChannel seek whenever possible.
+     */
+    fun openSeekableStreamAt(
+        uri: Uri?,
+        filePath: String?,
+        fileName: String,
+        stripExif: Boolean,
+        offset: Long
+    ): Pair<InputStream, Long> {
+        val safeOffset = offset.coerceAtLeast(0L)
+        if (safeOffset == 0L) {
+            return openPrivacyAwareStream(uri, filePath, fileName, stripExif) to 0L
+        }
+        val lower = fileName.lowercase()
+        val mustStrip = stripExif && (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+        if (!mustStrip) {
+            if (filePath != null) {
+                val f = File(filePath)
+                if (f.exists()) {
+                    val fis = FileInputStream(f)
+                    val clamped = safeOffset.coerceAtMost(f.length())
+                    fis.channel.position(clamped)
+                    return fis to clamped
+                }
+            }
+            if (uri != null) {
+                val afd = runCatching { context.contentResolver.openAssetFileDescriptor(uri, "r") }.getOrNull()
+                if (afd != null) {
+                    val sought = runCatching {
+                        val fis = afd.createInputStream()
+                        val channel = fis.channel
+                        val baseStart = afd.startOffset.coerceAtLeast(0L)
+                        val declaredLen = afd.declaredLength
+                        val clamped = if (declaredLen > 0L) safeOffset.coerceAtMost(declaredLen) else safeOffset
+                        channel.position(baseStart + clamped)
+                        fis to clamped
+                    }.getOrNull()
+                    if (sought != null) return sought
+                    runCatching { afd.close() }
+                }
+            }
+        }
+
+        val stream = openPrivacyAwareStream(uri, filePath, fileName, stripExif)
+        var remaining = safeOffset
+        val skipBuf = ByteArray(64 * 1024)
+        while (remaining > 0L) {
+            val skipped = stream.skip(remaining)
+            if (skipped > 0L) {
+                remaining -= skipped
+            } else {
+                val read = stream.read(skipBuf, 0, minOf(skipBuf.size.toLong(), remaining).toInt())
+                if (read <= 0) break
+                remaining -= read
+            }
+        }
+        return stream to (safeOffset - remaining).coerceAtLeast(0L)
+    }
+
+    fun getPartialTransferDir(): File {
+        return File(context.cacheDir, "partial_transfers").apply { if (!exists()) mkdirs() }
+    }
+
+    /**
+     * Deterministic partial download file path keyed by sanitized fileName and exact fileSize,
+     * allowing seamless byte-offset resumption even after stopping/recreating a group via QR.
+     */
+    fun getDeterministicPartialFile(fileName: String, fileSize: Long): File {
+        val safeName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(80)
+        val keyBytes = "$fileName|$fileSize".toByteArray(Charsets.UTF_8)
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(keyBytes)
+            .take(6).joinToString("") { "%02x".format(it) }
+        return File(getPartialTransferDir(), "part_${hash}_${fileSize}_$safeName")
+    }
+
     private fun stripJpegMetadata(data: ByteArray): ByteArray {
         if (data.size < 4 || data[0] != 0xFF.toByte() || data[1] != 0xD8.toByte()) return data
         val out = ByteArrayOutputStream(data.size)
@@ -383,7 +459,7 @@ class StorageRepository(
                 val created = treeDoc.createFile(mimeType, fileName)
                 if (created != null) {
                     context.contentResolver.openOutputStream(created.uri)?.use { out ->
-                        tempFile.inputStream().use { input -> input.copyTo(out, 64 * 1024) }
+                        tempFile.inputStream().use { input -> input.copyTo(out, 512 * 1024) }
                     }
                     return@withContext SavedOutputResult(
                         displayLocation = settings.customSaveLabel.ifBlank { created.uri.toString() },
@@ -429,7 +505,7 @@ class StorageRepository(
             val itemUri = context.contentResolver.insert(collection, values)
             if (itemUri != null) {
                 context.contentResolver.openOutputStream(itemUri)?.use { out ->
-                    tempFile.inputStream().use { input -> input.copyTo(out, 64 * 1024) }
+                    tempFile.inputStream().use { input -> input.copyTo(out, 512 * 1024) }
                 }
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
@@ -450,8 +526,10 @@ class StorageRepository(
             "NexoDrop"
         ).apply { if (!exists()) mkdirs() }
         val outFile = uniqueFile(downloadsDir, fileName)
-        tempFile.inputStream().use { input ->
-            outFile.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+        if (!tempFile.renameTo(outFile)) {
+            tempFile.inputStream().use { input ->
+                outFile.outputStream().use { out -> input.copyTo(out, 512 * 1024) }
+            }
         }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", outFile)
         return SavedOutputResult(
@@ -678,7 +756,7 @@ class StorageRepository(
 
     fun getTempTransferCacheBytes(): Long {
         var total = 0L
-        val dirs = listOf("apk_export", "apk_install", "vault_preview", "reports")
+        val dirs = listOf("apk_export", "apk_install", "vault_preview", "reports", "partial_transfers")
         dirs.forEach { dirName ->
             val d = File(context.cacheDir, dirName)
             if (d.exists()) {
@@ -695,7 +773,10 @@ class StorageRepository(
 
     fun clearTempTransferCache(includePartialDownloads: Boolean = false): Long {
         var freed = 0L
-        val dirs = listOf("apk_export", "apk_install", "vault_preview", "reports")
+        val dirs = mutableListOf("apk_export", "apk_install", "vault_preview", "reports")
+        if (includePartialDownloads) {
+            dirs += "partial_transfers"
+        }
         dirs.forEach { dirName ->
             val d = File(context.cacheDir, dirName)
             if (d.exists()) {

@@ -172,7 +172,7 @@ fun GroupHubScreen(
     onToggleLocalNetwork: (Boolean) -> Unit,
     onToggleAutoReceive: (Boolean) -> Unit,
     onParseQr: (String) -> ScannedQrResult?,
-    onJoinViaDirectCredentials: (ssid: String, pass: String, ip: String, port: Int, groupName: String, pin: String, hostMac: String) -> Unit,
+    onJoinViaDirectCredentials: (ssid: String, pass: String, ip: String, port: Int, groupName: String, pin: String, hostMac: String, groupId: String, frequency: Int) -> Unit,
     onCreateGroup: (name: String, pin: String, autoApprove: Boolean, webShare: Boolean) -> Unit,
     onJoinGroup: (ip: String, port: Int, groupName: String, pin: String) -> Unit,
     onLeaveOrCloseGroup: () -> Unit,
@@ -296,13 +296,7 @@ fun GroupHubScreen(
     }
 
     LaunchedEffect(joinApprovalFocusTick, state.pendingRequests.size, state.phase) {
-        if (joinApprovalFocusTick > 0 && state.role == GroupRole.HOST && state.pendingRequests.isNotEmpty() && isGroupActive) {
-            val targetIdx = 1 +
-                (if (showPrereqBanner) 1 else 0) +
-                (if (qrInvalidWarning) 1 else 0) +
-                (if (state.lastError != null) 1 else 0) +
-                1
-            listState.animateScrollToItem(targetIdx)
+        if ((joinApprovalFocusTick > 0 || state.pendingRequests.isNotEmpty()) && state.role == GroupRole.HOST && isGroupActive) {
             highlightJoinRequests = true
             delay(2800)
             highlightJoinRequests = false
@@ -327,6 +321,105 @@ fun GroupHubScreen(
                 .widthIn(max = if (isWideScreen) 980.dp else 640.dp)
                 .fillMaxSize()
         ) {
+            // Pinned, always-visible in-app Join Request Notification Banner (above scroll/QR)
+            AnimatedVisibility(
+                visible = isGroupActive && state.role == GroupRole.HOST && state.pendingRequests.isNotEmpty()
+            ) {
+                val borderTint by animateColorAsState(
+                    targetValue = if (highlightJoinRequests) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)
+                    },
+                    label = "pinned_join_req_border"
+                )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .testTag("pinned_join_request_banner")
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        ),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(if (highlightJoinRequests) 2.dp else 1.dp, borderTint),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(
+                            alpha = if (highlightJoinRequests) 0.92f else 0.78f
+                        )
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Rounded.NotificationsActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.hub_pending_requests, state.pendingRequests.size),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        state.pendingRequests.forEach { req ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = req.deviceName,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${req.ipAddress} • Key: ${req.keyFingerprint}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FilledTonalButton(
+                                        onClick = { onRespondJoinRequest(req.requestId, false) },
+                                        modifier = Modifier
+                                            .height(48.dp)
+                                            .testTag("pinned_join_reject_${req.requestId}")
+                                    ) {
+                                        Text(stringResource(R.string.hub_reject))
+                                    }
+                                    Button(
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onRespondJoinRequest(req.requestId, true)
+                                        },
+                                        modifier = Modifier
+                                            .height(48.dp)
+                                            .testTag("pinned_join_approve_${req.requestId}")
+                                    ) {
+                                        Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(stringResource(R.string.hub_approve))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             PullToRefreshBox(
                 isRefreshing = isRefreshingHub,
                 onRefresh = {
@@ -1224,88 +1317,7 @@ fun GroupHubScreen(
                         }
                     }
 
-                    // 2. Pending Join Requests Banner (Always visible to Host regardless of active tab)
-                    if (state.role == GroupRole.HOST && state.pendingRequests.isNotEmpty()) {
-                        item(key = "pending_join_requests") {
-                            val borderTint by animateColorAsState(
-                                targetValue = if (highlightJoinRequests) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.45f)
-                                },
-                                label = "join_req_border"
-                            )
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .animateContentSize(
-                                        animationSpec = spring(
-                                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                                            stiffness = Spring.StiffnessMediumLow
-                                        )
-                                    ),
-                                shape = RoundedCornerShape(20.dp),
-                                border = BorderStroke(if (highlightJoinRequests) 2.dp else 1.dp, borderTint),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(
-                                        alpha = if (highlightJoinRequests) 0.72f else 0.48f
-                                    )
-                                )
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            Icons.Rounded.NotificationsActive,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = stringResource(R.string.hub_pending_requests, state.pendingRequests.size),
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    state.pendingRequests.forEach { req ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(req.deviceName, style = MaterialTheme.typography.bodyLarge)
-                                                Text(
-                                                    "${req.ipAddress} • Key: ${req.keyFingerprint}",
-                                                    style = MaterialTheme.typography.labelSmall
-                                                )
-                                            }
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                FilledTonalButton(
-                                                    onClick = { onRespondJoinRequest(req.requestId, false) },
-                                                    modifier = Modifier.height(48.dp)
-                                                ) {
-                                                    Text(stringResource(R.string.hub_reject))
-                                                }
-                                                Button(
-                                                    onClick = {
-                                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                        onRespondJoinRequest(req.requestId, true)
-                                                    },
-                                                    modifier = Modifier.height(48.dp)
-                                                ) {
-                                                    Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text(stringResource(R.string.hub_approve))
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // Pending Join Requests are pinned cleanly above PullToRefreshBox so Host always sees them immediately.
 
                     // 3. Clean Workspace Tabs with Modern Icons: Files | Peers | Chat
                     item {
@@ -2237,7 +2249,9 @@ fun GroupHubScreen(
                         parsed.hostPort,
                         parsed.groupName,
                         "",
-                        parsed.hostMac
+                        parsed.hostMac,
+                        parsed.groupId,
+                        parsed.frequency
                     )
                 }
             }
@@ -2268,7 +2282,9 @@ fun GroupHubScreen(
                         parsed.hostPort,
                         parsed.groupName,
                         pin.trim(),
-                        parsed.hostMac
+                        parsed.hostMac,
+                        parsed.groupId,
+                        parsed.frequency
                     )
                 }) {
                     Text(stringResource(R.string.hub_connect))

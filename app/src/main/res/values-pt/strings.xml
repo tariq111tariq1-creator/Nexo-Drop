@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">Enviado — a aguardar</string>
     <string name="hub_resend">Reenviar</string>
     <string name="hub_paste_send">Colar e enviar</string>
+    <string name="account_section_title">Conta Google e Sincronização (Opcional)</string>
+    <string name="account_optional_hint">Opcional — transferências offline, cofre e backups funcionam sem iniciar sessão.</string>
+    <string name="account_sign_in_google">Iniciar sessão com Google</string>
+    <string name="account_sign_out">Terminar sessão</string>
+    <string name="account_sync_now">Sincronizar agora</string>
+    <string name="account_apply_prefs">Restaurar preferências</string>
+    <string name="account_linked_devices">Dispositivos associados (%1$d)</string>
+    <string name="account_this_device_badge">Este dispositivo</string>
+    <string name="account_synced_transfers_count">Transferências sincronizadas: %1$d</string>
+    <string name="account_remove_device">Desassociar</string>
+    <string name="account_signed_in_msg">Sessão iniciada com Google</string>
+    <string name="account_sign_in_failed">Falha ao iniciar sessão Google</string>
+    <string name="account_signed_out_msg">Sessão terminada</string>
+    <string name="account_sync_done">Sincronização concluída</string>
+    <string name="account_sync_failed">Falha na sincronização</string>
+    <string name="account_prefs_applied">Preferências aplicadas</string>
+    <string name="hub_view_group">Ver grupo</string>
+    <string name="hub_global_join_alert">%1$s quer entrar no teu grupo</string>
 </resources>

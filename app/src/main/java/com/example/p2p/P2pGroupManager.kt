@@ -3,6 +3,7 @@ package com.example.p2p
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import com.example.data.AppPreferences
 import com.example.data.FileCategory
 import com.example.data.NexoRepository
@@ -30,6 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -76,6 +78,10 @@ class P2pGroupManager(
     private val pausedTransferIds = ConcurrentHashMap.newKeySet<String>()
     private val autoQueuedItemIds = ConcurrentHashMap.newKeySet<String>()
     private val autoReceiveChannel = Channel<Pair<SharedGroupItem, Boolean>>(Channel.UNLIMITED)
+    private val resumeQueueLock = Any()
+    private val pendingQueueFile = File(context.filesDir, "pending_resume_queue.json")
+    @Volatile
+    private var restoredPendingThisSession = false
 
     private val webShareServer = WebShareServer(
         scope = scope,
@@ -114,6 +120,9 @@ class P2pGroupManager(
 
     companion object {
         const val PRIMARY_P2P_PORT = 45892
+        private const val CHUNK_SIZE_BYTES = 512 * 1024
+        private const val SOCKET_BUF_BYTES = 512 * 1024
+        private const val STREAM_BUF_BYTES = 256 * 1024
     }
 
     private var pendingDirectJoin: PendingDirectJoin? = null
@@ -171,7 +180,8 @@ class P2pGroupManager(
                                 hostIp = effectiveIp,
                                 ssid = event.ssid,
                                 pass = event.passphrase,
-                                hostMac = event.hostMac
+                                hostMac = event.hostMac,
+                                frequency = event.frequency
                             )
                         }
                     }
@@ -182,7 +192,8 @@ class P2pGroupManager(
                                 hostIp = effectiveIp,
                                 ssid = event.ssid,
                                 pass = event.passphrase,
-                                hostMac = ""
+                                hostMac = "",
+                                frequency = 0
                             )
                         }
                     }
@@ -193,8 +204,8 @@ class P2pGroupManager(
                             val targetName = pending?.groupName ?: st.groupName.ifBlank { "Direct Group" }
                             val targetPin = pending?.pin ?: ""
                             val targetPort = pending?.port ?: PRIMARY_P2P_PORT
-                            delay(550)
-                            joinGroup(event.ownerIp, targetPort, targetName, targetPin, maxConnectAttempts = 12)
+                            discoveryManager.waitForDirectSubnetIp(4_500L)
+                            joinGroup(event.ownerIp, targetPort, targetName, targetPin, maxConnectAttempts = 18)
                         }
                     }
                     is DirectDiscoveryEvent.SpecifierNetworkReady -> {
@@ -203,8 +214,8 @@ class P2pGroupManager(
                         val targetPort = pending?.port ?: PRIMARY_P2P_PORT
                         val targetName = pending?.groupName ?: "Direct Group"
                         val targetPin = pending?.pin ?: ""
-                        delay(350)
-                        joinGroup(targetIp, targetPort, targetName, targetPin, maxConnectAttempts = 8)
+                        discoveryManager.waitForDirectSubnetIp(3_500L)
+                        joinGroup(targetIp, targetPort, targetName, targetPin, maxConnectAttempts = 12)
                     }
                     is DirectDiscoveryEvent.SpecifierNetworkFailed -> {
                         _state.value = _state.value.copy(
@@ -265,7 +276,7 @@ class P2pGroupManager(
             autoReceiveFiles = preserveAutoReceive,
             connectionStep = 4,
             webShareUrl = "",
-            directQrPayload = buildDirectQrPayload(ssid, passphrase, directIp, tcpPort, cleanGroupName, false),
+            directQrPayload = buildDirectQrPayload(ssid, passphrase, directIp, tcpPort, cleanGroupName, false, groupId = groupId),
             localNetworkEnabled = preserveLanMode,
             myPermission = PeerPermission.FULL_ACCESS,
             peers = listOf(hostPeer),
@@ -286,7 +297,13 @@ class P2pGroupManager(
         }
     }
 
-    private fun updateHostNetworkInfo(hostIp: String, ssid: String, pass: String, hostMac: String = "") {
+    private fun updateHostNetworkInfo(
+        hostIp: String,
+        ssid: String,
+        pass: String,
+        hostMac: String = "",
+        frequency: Int = 0
+    ) {
         val st = _state.value
         val qr = buildDirectQrPayload(
             ssid = ssid,
@@ -295,7 +312,9 @@ class P2pGroupManager(
             port = st.hostPort,
             groupName = st.groupName,
             hasPin = st.hasPin,
-            hostMac = hostMac
+            hostMac = hostMac,
+            groupId = st.groupId,
+            frequency = frequency
         )
         val webUrl = if (hostWebShareEnabled && hostWebSharePort > 0) {
             "http://$hostIp:$hostWebSharePort"
@@ -314,7 +333,9 @@ class P2pGroupManager(
         port: Int,
         groupName: String,
         hasPin: Boolean,
-        hostMac: String = ""
+        hostMac: String = "",
+        groupId: String = "",
+        frequency: Int = 0
     ): String {
         return JSONObject().apply {
             put("t", "nx_direct")
@@ -325,7 +346,121 @@ class P2pGroupManager(
             put("name", groupName)
             put("pin", hasPin)
             if (hostMac.isNotBlank()) put("mac", hostMac)
+            if (groupId.isNotBlank()) put("gid", groupId)
+            if (frequency > 0) put("freq", frequency)
         }.toString()
+    }
+
+    // =========================================================================
+    // Cross-Session Pending Transfer Resume Queue Persistence
+    // =========================================================================
+
+    private fun persistPendingOutgoingDescriptors(descriptors: List<LocalSourceDescriptor>) {
+        if (descriptors.isEmpty()) return
+        synchronized(resumeQueueLock) {
+            runCatching {
+                val arr = if (pendingQueueFile.exists()) {
+                    runCatching { JSONArray(pendingQueueFile.readText()) }.getOrDefault(JSONArray())
+                } else JSONArray()
+
+                val existingKeys = HashSet<String>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    existingKeys.add("${o.optString("fileName")}|${o.optLong("fileSize")}")
+                }
+                descriptors.forEach { d ->
+                    val hasValidSource = d.uri != null || (d.filePath != null && File(d.filePath).exists())
+                    if (hasValidSource && existingKeys.add("${d.fileName}|${d.fileSize}")) {
+                        arr.put(JSONObject().apply {
+                            put("itemId", d.itemId)
+                            put("fileName", d.fileName)
+                            put("fileSize", d.fileSize)
+                            put("mimeType", d.mimeType)
+                            put("uri", d.uri?.toString() ?: "")
+                            put("filePath", d.filePath ?: "")
+                            put("isAppPackage", d.isAppPackage)
+                            put("sha256", d.sha256)
+                        })
+                    }
+                }
+                pendingQueueFile.writeText(arr.toString())
+            }
+        }
+    }
+
+    private fun removePendingOutgoingEntry(fileName: String, fileSize: Long) {
+        if (fileName.isBlank()) return
+        synchronized(resumeQueueLock) {
+            runCatching {
+                if (!pendingQueueFile.exists()) return
+                val arr = runCatching { JSONArray(pendingQueueFile.readText()) }.getOrNull() ?: return
+                val kept = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val fn = o.optString("fileName")
+                    val fs = o.optLong("fileSize")
+                    if (fn != fileName || fs != fileSize) {
+                        kept.put(o)
+                    }
+                }
+                if (kept.length() == 0) {
+                    pendingQueueFile.delete()
+                } else {
+                    pendingQueueFile.writeText(kept.toString())
+                }
+            }
+        }
+    }
+
+    private fun loadPendingOutgoingDescriptors(): List<LocalSourceDescriptor> {
+        synchronized(resumeQueueLock) {
+            if (!pendingQueueFile.exists()) return emptyList()
+            val list = mutableListOf<LocalSourceDescriptor>()
+            val validArray = JSONArray()
+            runCatching {
+                val arr = JSONArray(pendingQueueFile.readText())
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val uriStr = o.optString("uri", "")
+                    val pathStr = o.optString("filePath", "").ifBlank { null }
+                    val uri = uriStr.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                    val pathExists = pathStr != null && File(pathStr).exists()
+                    val uriReadable = if (!pathExists && uri != null) {
+                        runCatching { context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false }.getOrDefault(false)
+                    } else false
+                    if (pathExists || uriReadable) {
+                        validArray.put(o)
+                        list += LocalSourceDescriptor(
+                            itemId = o.optString("itemId").ifBlank { UUID.randomUUID().toString().take(10) },
+                            fileName = o.getString("fileName"),
+                            fileSize = o.optLong("fileSize", 0L),
+                            mimeType = o.optString("mimeType", "application/octet-stream"),
+                            uri = uri,
+                            filePath = pathStr,
+                            isAppPackage = o.optBoolean("isAppPackage", false),
+                            sha256 = o.optString("sha256", "")
+                        )
+                    }
+                }
+                if (validArray.length() == 0) pendingQueueFile.delete()
+                else if (validArray.length() != arr.length()) pendingQueueFile.writeText(validArray.toString())
+            }
+            return list
+        }
+    }
+
+    private fun restorePendingOutgoingSharesIfAny() {
+        if (restoredPendingThisSession) return
+        val phase = _state.value.phase
+        if (phase != ConnectionPhase.HOSTING && phase != ConnectionPhase.CONNECTED) return
+        val pending = loadPendingOutgoingDescriptors()
+        if (pending.isEmpty()) return
+        restoredPendingThisSession = true
+        val existingKeys = _state.value.sharedItems.map { "${it.fileName}|${it.fileSize}" }.toSet()
+        val toRestore = pending.filterNot { existingKeys.contains("${it.fileName}|${it.fileSize}") }
+        if (toRestore.isNotEmpty()) {
+            addFilesToSharedGroup(toRestore)
+        }
     }
 
     private class ConnectedClientSession(
@@ -433,7 +568,9 @@ class P2pGroupManager(
         hostPort: Int,
         groupName: String,
         pin: String,
-        hostMac: String = ""
+        hostMac: String = "",
+        groupId: String = "",
+        frequency: Int = 0
     ) {
         stopScanning()
         if (ssid.isNotBlank()) {
@@ -452,7 +589,7 @@ class P2pGroupManager(
                 groupName = groupName,
                 lastError = null
             )
-            discoveryManager.connectDirectByQrCredentials(ssid, passphrase, hostMac)
+            discoveryManager.connectDirectByQrCredentials(ssid, passphrase, hostMac, groupId, frequency)
         } else if (hostIp.isNotBlank()) {
             joinGroup(hostIp, hostPort.takeIf { it > 0 } ?: PRIMARY_P2P_PORT, groupName, pin)
         }
@@ -478,6 +615,7 @@ class P2pGroupManager(
             val attempt = runCatching {
                 ServerSocket().apply {
                     reuseAddress = true
+                    runCatching { receiveBufferSize = SOCKET_BUF_BYTES }
                     bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), p))
                 }
             }.getOrNull()
@@ -495,7 +633,6 @@ class P2pGroupManager(
         stopScanning()
         val preserveAutoReceive = _state.value.autoReceiveFiles
         val preserveLanMode = _state.value.localNetworkEnabled
-        // Transition out of IDLE synchronously so UI LaunchedEffect won't restart Android 11 peer discovery mid-setup
         _state.value = _state.value.copy(
             phase = ConnectionPhase.CONNECTING,
             role = GroupRole.HOST,
@@ -544,7 +681,7 @@ class P2pGroupManager(
                 autoReceiveFiles = preserveAutoReceive,
                 connectionStep = 4,
                 webShareUrl = webUrl,
-                directQrPayload = buildDirectQrPayload("", "", directIp, tcpPort, cleanGroupName, pin.isNotBlank()),
+                directQrPayload = buildDirectQrPayload("", "", directIp, tcpPort, cleanGroupName, pin.isNotBlank(), groupId = groupId),
                 localNetworkEnabled = preserveLanMode,
                 myPermission = PeerPermission.FULL_ACCESS,
                 peers = listOf(hostPeer),
@@ -558,7 +695,6 @@ class P2pGroupManager(
 
             TransferForegroundService.start(context, cleanGroupName, tcpPort)
 
-            // PRIMARY: Direct Device-to-Device Host (Wi-Fi Direct Group Owner + DNS-SD, auto-fallback to Hotspot)
             discoveryManager.startDirectGroupHost(
                 groupId = groupId,
                 groupName = cleanGroupName,
@@ -567,7 +703,6 @@ class P2pGroupManager(
                 hasPin = pin.isNotBlank()
             )
 
-            // SECONDARY: Optional Local Wi-Fi Network advertisement when explicitly enabled
             if (preserveLanMode) {
                 discoveryManager.startLocalNetworkAdvertising(
                     groupId = groupId,
@@ -591,10 +726,13 @@ class P2pGroupManager(
     private suspend fun handleIncomingSocketOnHost(socket: Socket) {
         try {
             socket.tcpNoDelay = true
-            val dis = DataInputStream(BufferedInputStream(socket.getInputStream()))
-            val dos = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+            runCatching {
+                socket.sendBufferSize = SOCKET_BUF_BYTES
+                socket.receiveBufferSize = SOCKET_BUF_BYTES
+            }
+            val dis = DataInputStream(BufferedInputStream(socket.getInputStream(), STREAM_BUF_BYTES))
+            val dos = DataOutputStream(BufferedOutputStream(socket.getOutputStream(), STREAM_BUF_BYTES))
 
-            // Step 1: ECDH Key Exchange
             val keyPair = CryptoEngine.generateEphemeralEcKeyPair()
             val localPub = keyPair.public.encoded
             dos.writeInt(localPub.size)
@@ -612,7 +750,6 @@ class P2pGroupManager(
             val salt = "nexodrop-hkdf-v1".toByteArray(Charsets.UTF_8)
             val (sessionKey, fingerprint) = CryptoEngine.deriveSessionKey(keyPair, remotePub, salt)
 
-            // Step 2: Encrypted Session Mode Frame
             val modeBytes = CryptoEngine.readEncryptedFrame(dis, sessionKey)
             val modeJson = P2pProtocol.parse(modeBytes)
             when (modeJson.optString("mode")) {
@@ -734,8 +871,9 @@ class P2pGroupManager(
 
         broadcastPeerList()
         sendManifestToClient(session)
+        // Auto-resume unfinished outgoing shares from any interrupted previous session
+        restorePendingOutgoingSharesIfAny()
 
-        // Control loop
         try {
             while (!socket.isClosed) {
                 val frame = CryptoEngine.readEncryptedFrame(dis, sessionKey)
@@ -891,6 +1029,9 @@ class P2pGroupManager(
             currentMap[itemId] = existing + receiverName
             _state.value = _state.value.copy(deliveryReceipts = currentMap)
         }
+        _state.value.sharedItems.firstOrNull { it.itemId == itemId }?.let { ackItem ->
+            removePendingOutgoingEntry(ackItem.fileName, ackItem.fileSize)
+        }
         if (_state.value.role == GroupRole.HOST) {
             val payload = P2pProtocol.msg(P2pProtocol.TYPE_DELIVERY_ACK) {
                 put("itemId", itemId)
@@ -960,7 +1101,6 @@ class P2pGroupManager(
                 )
                 _events.tryEmit(P2pEvent.FileReceived(fileName, size, saved.isInVault))
 
-                // Also share to Android members if Host is running a group
                 if (_state.value.role == GroupRole.HOST && !saved.isInVault) {
                     val desc = LocalSourceDescriptor(
                         itemId = itemId,
@@ -980,12 +1120,8 @@ class P2pGroupManager(
         }
     }
 
-    /**
-     * Opens a TCP socket bound to the direct Wi-Fi / P2P network if available (preventing mobile data hijacking)
-     * and retries briefly while direct network routes settle.
-     */
     @Suppress("DEPRECATION")
-    private suspend fun openTcpSocket(hostIp: String, hostPort: Int, maxAttempts: Int = 5): Socket {
+    private suspend fun openTcpSocket(hostIp: String, hostPort: Int, maxAttempts: Int = 6): Socket {
         var lastException: Exception? = null
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         for (attempt in 1..maxAttempts) {
@@ -1009,23 +1145,24 @@ class P2pGroupManager(
                         runCatching { rawSock.bind(InetSocketAddress(matchingLocalIp, 0)) }
                     }
                 }
-                sock.connect(InetSocketAddress(hostIp, hostPort), 5500)
                 sock.tcpNoDelay = true
+                runCatching {
+                    sock.sendBufferSize = SOCKET_BUF_BYTES
+                    sock.receiveBufferSize = SOCKET_BUF_BYTES
+                }
+                sock.connect(InetSocketAddress(hostIp, hostPort), 5000)
                 return sock
             } catch (e: Exception) {
                 lastException = e
                 if (attempt < maxAttempts) {
-                    delay(700)
+                    delay(450)
                 }
             }
         }
         throw lastException ?: ConnectException("Unable to reach $hostIp:$hostPort")
     }
 
-    /**
-     * Join an existing Host group by IP, Port, and optional PIN.
-     */
-    fun joinGroup(hostIp: String, hostPort: Int, groupName: String, pin: String, maxConnectAttempts: Int = 5) {
+    fun joinGroup(hostIp: String, hostPort: Int, groupName: String, pin: String, maxConnectAttempts: Int = 6) {
         stopScanning()
         _state.value = _state.value.copy(
             phase = ConnectionPhase.CONNECTING,
@@ -1058,11 +1195,10 @@ class P2pGroupManager(
                 val sock = openTcpSocket(hostIp, hostPort, maxAttempts = maxConnectAttempts)
                 clientControlSocket = sock
 
-                val dis = DataInputStream(BufferedInputStream(sock.getInputStream()))
-                val dos = DataOutputStream(BufferedOutputStream(sock.getOutputStream()))
+                val dis = DataInputStream(BufferedInputStream(sock.getInputStream(), STREAM_BUF_BYTES))
+                val dos = DataOutputStream(BufferedOutputStream(sock.getOutputStream(), STREAM_BUF_BYTES))
                 clientControlOut = dos
 
-                // ECDH
                 val keyPair = CryptoEngine.generateEphemeralEcKeyPair()
                 val remoteLen = dis.readInt()
                 val remotePub = ByteArray(remoteLen)
@@ -1077,7 +1213,6 @@ class P2pGroupManager(
                 val (sessionKey, fingerprint) = CryptoEngine.deriveSessionKey(keyPair, remotePub, salt)
                 clientControlKey = sessionKey
 
-                // Send control join request
                 clientWriteMutex.withLock {
                     CryptoEngine.writeEncryptedFrame(dos, sessionKey, P2pProtocol.msg("JOIN") {
                         put("mode", "CONTROL")
@@ -1124,6 +1259,7 @@ class P2pGroupManager(
                     myPermission = PeerPermission.FULL_ACCESS
                 )
                 TransferForegroundService.start(context, _state.value.groupName, hostPort)
+                restorePendingOutgoingSharesIfAny()
 
                 clientReadJob = scope.launch {
                     try {
@@ -1165,7 +1301,8 @@ class P2pGroupManager(
                                 P2pProtocol.TYPE_FILE_PUSH_OFFER -> {
                                     val itemId = msg.getString("itemId")
                                     val requestId = msg.getString("requestId")
-                                    launch { pushLocalFileToHostRelay(itemId, requestId) }
+                                    val offset = msg.optLong("offset", 0L).coerceAtLeast(0L)
+                                    launch { pushLocalFileToHostRelay(itemId, requestId, offset) }
                                 }
                                 P2pProtocol.TYPE_DELIVERY_ACK -> {
                                     val itemId = msg.optString("itemId", "")
@@ -1177,6 +1314,11 @@ class P2pGroupManager(
                                             currentMap[itemId] = existing + receiverName
                                             _state.value = _state.value.copy(deliveryReceipts = currentMap)
                                         }
+                                        _state.value.sharedItems.firstOrNull { it.itemId == itemId }?.let { ackItem ->
+                                            if (ackItem.ownerDeviceId == myDeviceId) {
+                                                removePendingOutgoingEntry(ackItem.fileName, ackItem.fileSize)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1186,8 +1328,8 @@ class P2pGroupManager(
                             if (reconnectAttempts < 3 && lastConnectedIp.isNotBlank()) {
                                 reconnectAttempts++
                                 _events.tryEmit(P2pEvent.GroupNotification("Reconnecting ($reconnectAttempts/3)..."))
-                                delay(1500)
-                                joinGroup(lastConnectedIp, lastConnectedPort, lastConnectedName, lastConnectedPin)
+                                delay(1200)
+                                joinGroup(lastConnectedIp, lastConnectedPort, lastConnectedName, lastConnectedPin, maxConnectAttempts = 10)
                             } else {
                                 _state.value = _state.value.copy(
                                     phase = ConnectionPhase.IDLE,
@@ -1211,10 +1353,8 @@ class P2pGroupManager(
         }
     }
 
-    /**
-     * Add local files or packaged APKs to the live Shared Group Tray.
-     */
     fun addFilesToSharedGroup(descriptors: List<LocalSourceDescriptor>) {
+        persistPendingOutgoingDescriptors(descriptors)
         scope.launch {
             val myId = preferences.ensureDeviceId()
             val myName = currentSettings.deviceName
@@ -1294,10 +1434,6 @@ class P2pGroupManager(
         }
     }
 
-    /**
-     * Downloads a SharedGroupItem over the encrypted P2P connection and saves it
-     * to the chosen storage destination (Internal, SD Card, or Private Encrypted Vault).
-     */
     fun downloadGroupItem(item: SharedGroupItem, forceVault: Boolean = false) {
         scope.launch {
             performDownload(item, forceVault)
@@ -1317,12 +1453,21 @@ class P2pGroupManager(
             }
         }
 
+        // Deterministic partial file key survives stops/reconnections across sessions!
+        val partFile = storageRepository.getDeterministicPartialFile(item.fileName, item.fileSize)
+        if (partFile.exists() && item.fileSize > 0L && partFile.length() > item.fileSize) {
+            partFile.delete()
+        }
+        val initialExistingBytes = if (partFile.exists() && item.fileSize > 0L && partFile.length() <= item.fileSize) {
+            partFile.length()
+        } else 0L
+
         val transfer = ActiveTransfer(
             transferId = transferId,
             itemId = item.itemId,
             fileName = item.fileName,
             totalBytes = item.fileSize,
-            bytesTransferred = 0L,
+            bytesTransferred = initialExistingBytes,
             speedBytesPerSec = 0L,
             isUpload = false,
             peerName = item.ownerDeviceName,
@@ -1330,57 +1475,76 @@ class P2pGroupManager(
             sourceItem = item
         )
         upsertActiveTransfer(transfer)
-        val safeName = item.fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        val partFile = File(context.cacheDir, "part_${item.itemId}_$safeName")
 
         try {
-            // If Host is downloading an item owned by a Member, request Member to push to relay cache first
+            // Host downloading a local or member-owned file (with deterministic cross-session resume)
             if (_state.value.role == GroupRole.HOST) {
                 val localSrc = localSources[item.itemId]
-                val srcStream = if (localSrc != null) {
-                    storageRepository.openInputStream(localSrc.uri, localSrc.filePath)
+                if (localSrc != null) {
+                    val resumeOff = if (partFile.exists() && partFile.length() in 1L until item.fileSize) partFile.length() else 0L
+                    val (srcStream, effectiveOff) = storageRepository.openSeekableStreamAt(
+                        localSrc.uri, localSrc.filePath, localSrc.fileName, currentSettings.stripExifOnSend, resumeOff
+                    )
+                    val appendMode = effectiveOff > 0L && effectiveOff == resumeOff
+                    var copied = if (appendMode) effectiveOff else 0L
+                    val digest = if (!appendMode) MessageDigest.getInstance("SHA-256") else null
+                    srcStream.use { input ->
+                        BufferedOutputStream(FileOutputStream(partFile, appendMode), STREAM_BUF_BYTES).use { out ->
+                            val buf = ByteArray(CHUNK_SIZE_BYTES)
+                            var lastUi = System.currentTimeMillis()
+                            while (true) {
+                                if (activeCancelledIds.contains(transferId)) throw IllegalStateException("Cancelled by user")
+                                if (pausedTransferIds.contains(transferId)) throw TransferPausedException()
+                                val n = input.read(buf)
+                                if (n <= 0) break
+                                digest?.update(buf, 0, n)
+                                out.write(buf, 0, n)
+                                copied += n
+                                val now = System.currentTimeMillis()
+                                if (now - lastUi >= 150L) {
+                                    val elapsed = (now - startTime).coerceAtLeast(1L)
+                                    val deltaCopied = (copied - effectiveOff).coerceAtLeast(0L)
+                                    updateTransferProgress(transferId, copied, item.fileSize, (deltaCopied * 1000L) / elapsed)
+                                    lastUi = now
+                                }
+                            }
+                            out.flush()
+                        }
+                    }
+                    val sha = digest?.digest()?.joinToString("") { "%02x".format(it) } ?: CryptoEngine.sha256Hex(partFile)
+                    val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                    val deltaCopied = (copied - effectiveOff).coerceAtLeast(0L)
+                    val speed = (deltaCopied * 1000L) / elapsed
+                    finishDownload(transferId, item, partFile, sha, speed, elapsed, forceVault)
+                    return
                 } else {
                     val relayed = requestRelayFromOwner(item) ?: throw IllegalStateException("Owner peer unreachable")
-                    relayed.inputStream()
+                    val sha = CryptoEngine.sha256Hex(relayed)
+                    val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                    val speed = (relayed.length() * 1000L) / elapsed
+                    finishDownload(transferId, item, relayed, sha, speed, elapsed, forceVault)
+                    return
                 }
-                srcStream.use { input ->
-                    BufferedOutputStream(FileOutputStream(partFile, false)).use { out ->
-                        val buf = ByteArray(64 * 1024)
-                        var copied = 0L
-                        var lastUi = System.currentTimeMillis()
-                        while (true) {
-                            if (activeCancelledIds.contains(transferId)) throw IllegalStateException("Cancelled by user")
-                            if (pausedTransferIds.contains(transferId)) throw TransferPausedException()
-                            val n = input.read(buf)
-                            if (n <= 0) break
-                            out.write(buf, 0, n)
-                            copied += n
-                            val now = System.currentTimeMillis()
-                            if (now - lastUi >= 150L) {
-                                val elapsed = (now - startTime).coerceAtLeast(1L)
-                                updateTransferProgress(transferId, copied, item.fileSize, (copied * 1000L) / elapsed)
-                                lastUi = now
-                            }
-                        }
-                        out.flush()
-                    }
-                }
-                val sha = CryptoEngine.sha256Hex(partFile)
-                val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
-                val speed = (partFile.length() * 1000L) / elapsed
-                finishDownload(transferId, item, partFile, sha, speed, elapsed, forceVault)
-                return
             }
 
-            // Member pulling from Host over encrypted DATA_PULL TCP socket with offset resume support
+            // If 100% of bytes already arrived in partial_transfers right before disconnect, finalize immediately
+            if (item.fileSize > 0L && partFile.exists() && partFile.length() == item.fileSize) {
+                val diskSha = CryptoEngine.sha256Hex(partFile)
+                if (item.sha256.isBlank() || diskSha.equals(item.sha256, ignoreCase = true)) {
+                    finishDownload(transferId, item, partFile, diskSha, item.fileSize, 1L, forceVault)
+                    return
+                }
+            }
+
+            // Member pulling from Host over encrypted DATA_PULL TCP socket with instant offset resume
             val hostIp = _state.value.hostIp
             val hostPort = _state.value.hostPort
-            val sock = openTcpSocket(hostIp, hostPort, maxAttempts = 3)
-            val existingOffset = if (partFile.exists() && partFile.length() < item.fileSize) partFile.length() else 0L
+            val sock = openTcpSocket(hostIp, hostPort, maxAttempts = 6)
+            val existingOffset = if (partFile.exists() && partFile.length() in 1L until item.fileSize) partFile.length() else 0L
 
             sock.use { s ->
-                val dis = DataInputStream(BufferedInputStream(s.getInputStream()))
-                val dos = DataOutputStream(BufferedOutputStream(s.getOutputStream()))
+                val dis = DataInputStream(BufferedInputStream(s.getInputStream(), STREAM_BUF_BYTES))
+                val dos = DataOutputStream(BufferedOutputStream(s.getOutputStream(), STREAM_BUF_BYTES))
 
                 val keyPair = CryptoEngine.generateEphemeralEcKeyPair()
                 val remoteLen = dis.readInt()
@@ -1408,12 +1572,13 @@ class P2pGroupManager(
                 val resumedFrom = metaJson.optLong("resumedFrom", 0L)
                 val appendMode = resumedFrom > 0L && resumedFrom == existingOffset
                 var received = if (appendMode) resumedFrom else 0L
+                val inlineDigest = if (!appendMode) MessageDigest.getInstance("SHA-256") else null
                 if (appendMode) {
                     updateTransferProgress(transferId, received, expectedSize, 0L)
                 }
                 var lastUiUpdate = System.currentTimeMillis()
 
-                BufferedOutputStream(FileOutputStream(partFile, appendMode)).use { out ->
+                BufferedOutputStream(FileOutputStream(partFile, appendMode), STREAM_BUF_BYTES).use { out ->
                     while (true) {
                         if (activeCancelledIds.contains(transferId)) {
                             throw IllegalStateException("Cancelled by user")
@@ -1422,7 +1587,8 @@ class P2pGroupManager(
                             throw TransferPausedException()
                         }
                         val chunk = CryptoEngine.readEncryptedFrame(dis, sessionKey)
-                        if (chunk.isEmpty()) break // EOF sentinel
+                        if (chunk.isEmpty()) break
+                        inlineDigest?.update(chunk)
                         out.write(chunk)
                         received += chunk.size
                         val now = System.currentTimeMillis()
@@ -1442,7 +1608,8 @@ class P2pGroupManager(
                     out.flush()
                 }
 
-                val sha = CryptoEngine.sha256Hex(partFile)
+                val sha = inlineDigest?.digest()?.joinToString("") { "%02x".format(it) }
+                    ?: CryptoEngine.sha256Hex(partFile)
                 val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
                 val deltaReceived = (received - resumedFrom).coerceAtLeast(0L)
                 val speed = (deltaReceived * 1000L) / elapsed
@@ -1570,8 +1737,19 @@ class P2pGroupManager(
     }
 
     private suspend fun requestRelayFromOwner(item: SharedGroupItem): File? {
-        relayCacheFiles[item.itemId]?.takeIf { it.exists() }?.let { return it }
+        relayCacheFiles[item.itemId]?.takeIf { it.exists() && it.length() >= item.fileSize }?.let { return it }
         val ownerSession = hostClients[item.ownerDeviceId] ?: return null
+        val partialRelay = storageRepository.getDeterministicPartialFile(item.fileName, item.fileSize)
+        if (item.fileSize > 0L && partialRelay.exists() && partialRelay.length() == item.fileSize) {
+            if (item.sha256.isBlank() || CryptoEngine.sha256Hex(partialRelay).equals(item.sha256, ignoreCase = true)) {
+                relayCacheFiles[item.itemId] = partialRelay
+                return partialRelay
+            }
+        }
+        val existingOffset = if (partialRelay.exists() && partialRelay.length() in 1L until item.fileSize) {
+            partialRelay.length()
+        } else 0L
+
         val reqId = UUID.randomUUID().toString().take(8)
         val waiter = CompletableDeferred<File?>()
         pendingRelayWaiters[reqId] = waiter
@@ -1579,9 +1757,10 @@ class P2pGroupManager(
             CryptoEngine.writeEncryptedFrame(ownerSession.out, ownerSession.sessionKey, P2pProtocol.msg(P2pProtocol.TYPE_FILE_PUSH_OFFER) {
                 put("itemId", item.itemId)
                 put("requestId", reqId)
+                put("offset", existingOffset)
             })
         }
-        return withTimeoutOrNull(60_000L) { waiter.await() }
+        return withTimeoutOrNull(120_000L) { waiter.await() }
     }
 
     private suspend fun handleHostReceiveRelayPush(
@@ -1593,9 +1772,18 @@ class P2pGroupManager(
     ) {
         val itemId = meta.getString("itemId")
         val requestId = meta.getString("requestId")
-        val cacheFile = File(context.cacheDir, "relay_${itemId}")
+        val resumedFrom = meta.optLong("resumedFrom", 0L).coerceAtLeast(0L)
+        val item = _state.value.sharedItems.firstOrNull { it.itemId == itemId }
+        val fileName = meta.optString("fileName", item?.fileName ?: "relay_$itemId")
+        val fileSize = meta.optLong("fileSize", item?.fileSize ?: 0L)
+        val cacheFile = if (fileName.isNotBlank() && fileSize > 0L) {
+            storageRepository.getDeterministicPartialFile(fileName, fileSize)
+        } else {
+            File(context.cacheDir, "relay_${itemId}")
+        }
+        val appendMode = resumedFrom > 0L && cacheFile.exists() && cacheFile.length() == resumedFrom
         try {
-            BufferedOutputStream(FileOutputStream(cacheFile)).use { out ->
+            BufferedOutputStream(FileOutputStream(cacheFile, appendMode), STREAM_BUF_BYTES).use { out ->
                 while (true) {
                     val chunk = CryptoEngine.readEncryptedFrame(dis, sessionKey)
                     if (chunk.isEmpty()) break
@@ -1606,14 +1794,14 @@ class P2pGroupManager(
             relayCacheFiles[itemId] = cacheFile
             pendingRelayWaiters.remove(requestId)?.complete(cacheFile)
         } catch (_: Exception) {
-            cacheFile.delete()
+            // Preserve partial relay bytes across session drops so future reconnections can resume from offset
             pendingRelayWaiters.remove(requestId)?.complete(null)
         } finally {
             runCatching { socket.close() }
         }
     }
 
-    private suspend fun pushLocalFileToHostRelay(itemId: String, requestId: String) {
+    private suspend fun pushLocalFileToHostRelay(itemId: String, requestId: String, requestedOffset: Long = 0L) {
         val src = localSources[itemId] ?: return
         val transferId = UUID.randomUUID().toString().take(10)
         val startTime = System.currentTimeMillis()
@@ -1623,17 +1811,17 @@ class P2pGroupManager(
                 itemId = itemId,
                 fileName = src.fileName,
                 totalBytes = src.fileSize,
-                bytesTransferred = 0L,
+                bytesTransferred = requestedOffset,
                 speedBytesPerSec = 0L,
                 isUpload = true,
                 peerName = _state.value.groupName
             )
         )
         try {
-            val sock = openTcpSocket(_state.value.hostIp, _state.value.hostPort, maxAttempts = 3)
+            val sock = openTcpSocket(_state.value.hostIp, _state.value.hostPort, maxAttempts = 5)
             sock.use { s ->
-                val dis = DataInputStream(BufferedInputStream(s.getInputStream()))
-                val dos = DataOutputStream(BufferedOutputStream(s.getOutputStream()))
+                val dis = DataInputStream(BufferedInputStream(s.getInputStream(), STREAM_BUF_BYTES))
+                val dos = DataOutputStream(BufferedOutputStream(s.getOutputStream(), STREAM_BUF_BYTES))
 
                 val keyPair = CryptoEngine.generateEphemeralEcKeyPair()
                 val remoteLen = dis.readInt()
@@ -1647,34 +1835,45 @@ class P2pGroupManager(
                 val salt = "nexodrop-hkdf-v1".toByteArray(Charsets.UTF_8)
                 val (sessionKey, _) = CryptoEngine.deriveSessionKey(keyPair, remotePub, salt)
 
+                val (stream, effectiveOffset) = storageRepository.openSeekableStreamAt(
+                    src.uri, src.filePath, src.fileName, currentSettings.stripExifOnSend, requestedOffset
+                )
+
                 CryptoEngine.writeEncryptedFrame(dos, sessionKey, P2pProtocol.msg("DATA_PUSH") {
                     put("mode", "DATA_PUSH")
                     put("itemId", itemId)
                     put("requestId", requestId)
+                    put("fileName", src.fileName)
+                    put("fileSize", src.fileSize)
+                    put("resumedFrom", effectiveOffset)
                 })
 
-                val stream = storageRepository.openPrivacyAwareStream(
-                    src.uri, src.filePath, src.fileName, currentSettings.stripExifOnSend
-                )
-                val digest = MessageDigest.getInstance("SHA-256")
-                var sent = 0L
-                val buf = ByteArray(128 * 1024)
+                val digest = if (effectiveOffset == 0L) MessageDigest.getInstance("SHA-256") else null
+                var sent = effectiveOffset
+                val buf = ByteArray(CHUNK_SIZE_BYTES)
+                var lastUi = System.currentTimeMillis()
                 stream.use { input ->
                     while (true) {
+                        if (activeCancelledIds.contains(transferId)) throw IllegalStateException("Cancelled")
                         val read = input.read(buf)
                         if (read <= 0) break
-                        val chunk = if (read == buf.size) buf else buf.copyOf(read)
-                        digest.update(chunk)
-                        CryptoEngine.writeEncryptedFrame(dos, sessionKey, chunk)
+                        digest?.update(buf, 0, read)
+                        CryptoEngine.writeEncryptedChunk(dos, sessionKey, buf, 0, read, flush = false)
                         sent += read
-                        val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
-                        updateTransferProgress(transferId, sent, src.fileSize, (sent * 1000L) / elapsed)
+                        val now = System.currentTimeMillis()
+                        if (now - lastUi >= 150L) {
+                            val elapsed = (now - startTime).coerceAtLeast(1L)
+                            val deltaSent = (sent - effectiveOffset).coerceAtLeast(0L)
+                            updateTransferProgress(transferId, sent, src.fileSize, (deltaSent * 1000L) / elapsed)
+                            lastUi = now
+                        }
                     }
                 }
                 CryptoEngine.writeEncryptedFrame(dos, sessionKey, ByteArray(0))
                 val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
-                val speed = (sent * 1000L) / elapsed
-                val sha = digest.digest().joinToString("") { "%02x".format(it) }
+                val deltaSent = (sent - effectiveOffset).coerceAtLeast(0L)
+                val speed = (deltaSent * 1000L) / elapsed
+                val sha = digest?.digest()?.joinToString("") { "%02x".format(it) } ?: src.sha256
                 markTransferFinished(transferId, completed = true, finalBytes = sent, speed = speed)
                 repository.recordTransfer(
                     TransferRecordEntity(
@@ -1718,10 +1917,11 @@ class P2pGroupManager(
             return
         }
 
+        val requestedOffset = req.optLong("offset", 0L).coerceAtLeast(0L)
         val localSrc = localSources[itemId]
-        val inputStream = if (localSrc != null) {
-            storageRepository.openPrivacyAwareStream(
-                localSrc.uri, localSrc.filePath, localSrc.fileName, currentSettings.stripExifOnSend
+        val (inputStream, effectiveOffset) = if (localSrc != null) {
+            storageRepository.openSeekableStreamAt(
+                localSrc.uri, localSrc.filePath, localSrc.fileName, currentSettings.stripExifOnSend, requestedOffset
             )
         } else {
             val relayed = requestRelayFromOwner(item)
@@ -1732,11 +1932,12 @@ class P2pGroupManager(
                 socket.close()
                 return
             }
-            FileInputStream(relayed)
+            storageRepository.openSeekableStreamAt(
+                null, relayed.absolutePath, item.fileName, false, requestedOffset
+            )
         }
 
         val transferId = UUID.randomUUID().toString().take(10)
-        val requestedOffset = req.optLong("offset", 0L).coerceAtLeast(0L)
         val startTime = System.currentTimeMillis()
         upsertActiveTransfer(
             ActiveTransfer(
@@ -1744,7 +1945,7 @@ class P2pGroupManager(
                 itemId = itemId,
                 fileName = item.fileName,
                 totalBytes = item.fileSize,
-                bytesTransferred = requestedOffset,
+                bytesTransferred = effectiveOffset,
                 speedBytesPerSec = 0L,
                 isUpload = true,
                 peerName = socket.inetAddress.hostAddress ?: "Peer"
@@ -1752,40 +1953,23 @@ class P2pGroupManager(
         )
 
         try {
-            var remainingToSkip = requestedOffset
-            if (remainingToSkip > 0L) {
-                val skipBuf = ByteArray(16 * 1024)
-                while (remainingToSkip > 0L) {
-                    val skipped = inputStream.skip(remainingToSkip)
-                    if (skipped > 0L) {
-                        remainingToSkip -= skipped
-                    } else {
-                        val read = inputStream.read(skipBuf, 0, minOf(skipBuf.size.toLong(), remainingToSkip).toInt())
-                        if (read <= 0) break
-                        remainingToSkip -= read
-                    }
-                }
-            }
-            val effectiveOffset = (requestedOffset - remainingToSkip).coerceAtLeast(0L)
-
             CryptoEngine.writeEncryptedFrame(dos, sessionKey, P2pProtocol.msg(P2pProtocol.TYPE_FILE_META) {
                 put("fileName", item.fileName)
                 put("fileSize", item.fileSize)
                 put("resumedFrom", effectiveOffset)
             })
 
-            val digest = MessageDigest.getInstance("SHA-256")
+            val digest = if (effectiveOffset == 0L) MessageDigest.getInstance("SHA-256") else null
             var sent = effectiveOffset
-            val buf = ByteArray(128 * 1024)
+            val buf = ByteArray(CHUNK_SIZE_BYTES)
             var lastUi = System.currentTimeMillis()
             inputStream.use { input ->
                 while (true) {
                     if (activeCancelledIds.contains(transferId)) throw IllegalStateException("Cancelled")
                     val read = input.read(buf)
                     if (read <= 0) break
-                    val chunk = if (read == buf.size) buf else buf.copyOf(read)
-                    digest.update(chunk)
-                    CryptoEngine.writeEncryptedFrame(dos, sessionKey, chunk)
+                    digest?.update(buf, 0, read)
+                    CryptoEngine.writeEncryptedChunk(dos, sessionKey, buf, 0, read, flush = false)
                     sent += read
                     val now = System.currentTimeMillis()
                     if (now - lastUi >= 150L) {
@@ -1796,10 +1980,11 @@ class P2pGroupManager(
                     }
                 }
             }
-            CryptoEngine.writeEncryptedFrame(dos, sessionKey, ByteArray(0)) // EOF
+            CryptoEngine.writeEncryptedFrame(dos, sessionKey, ByteArray(0))
             val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
-            val speed = (sent * 1000L) / elapsed
-            val sha = digest.digest().joinToString("") { "%02x".format(it) }
+            val deltaSent = (sent - effectiveOffset).coerceAtLeast(0L)
+            val speed = (deltaSent * 1000L) / elapsed
+            val sha = digest?.digest()?.joinToString("") { "%02x".format(it) } ?: item.sha256
             markTransferFinished(transferId, completed = true, finalBytes = sent, speed = speed)
             repository.recordTransfer(
                 TransferRecordEntity(
@@ -1847,9 +2032,13 @@ class P2pGroupManager(
         val target = _state.value.activeTransfers.firstOrNull { it.transferId == transferId }
         pausedTransferIds.remove(transferId)
         activeCancelledIds.add(transferId)
-        if (target != null && !target.isUpload) {
-            val safeName = target.fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-            File(context.cacheDir, "part_${target.itemId}_$safeName").takeIf { it.exists() }?.delete()
+        if (target != null) {
+            if (target.isUpload) {
+                removePendingOutgoingEntry(target.fileName, target.totalBytes)
+            } else {
+                storageRepository.getDeterministicPartialFile(target.fileName, target.totalBytes)
+                    .takeIf { it.exists() }?.delete()
+            }
         }
         _state.value = _state.value.copy(
             activeTransfers = _state.value.activeTransfers.filterNot { it.transferId == transferId }
@@ -1903,6 +2092,7 @@ class P2pGroupManager(
         if (resetToIdle) {
             intentionalDisconnect = true
             reconnectAttempts = 0
+            restoredPendingThisSession = false
         }
         val preserveAutoReceive = _state.value.autoReceiveFiles
         val preserveLanMode = _state.value.localNetworkEnabled
@@ -1934,13 +2124,18 @@ class P2pGroupManager(
         clientControlKey = null
         clientControlOut = null
 
-        relayCacheFiles.values.forEach { it.delete() }
+        val partialDirCanonical = runCatching { storageRepository.getPartialTransferDir().canonicalPath }.getOrNull()
+        relayCacheFiles.values.forEach { f ->
+            val inPartialDir = partialDirCanonical != null && runCatching { f.canonicalPath.startsWith(partialDirCanonical) }.getOrDefault(false)
+            if (!inPartialDir) f.delete()
+        }
         relayCacheFiles.clear()
         autoQueuedItemIds.clear()
         pausedTransferIds.clear()
         activeCancelledIds.clear()
         if (resetToIdle) {
-            storageRepository.clearTempTransferCache(includePartialDownloads = true)
+            // Preserve partial_transfers across session close so reconnecting via QR resumes mid-file!
+            storageRepository.clearTempTransferCache(includePartialDownloads = false)
         }
 
         TransferForegroundService.stop(context)

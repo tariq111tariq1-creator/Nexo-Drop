@@ -298,4 +298,24 @@
     <string name="hub_sent_waiting">تم الإرسال — بانتظار التنزيل</string>
     <string name="hub_resend">إعادة إرسال</string>
     <string name="hub_paste_send">لصق وإرسال</string>
+
+    <!-- حساب قوقل الاختياري والمزامنة + إشعار الانضمام العام -->
+    <string name="account_section_title">حساب قوقل والمزامنة السحابية (اختياري)</string>
+    <string name="account_optional_hint">اختياري — جميع النقل المباشر والخزنة والنسخ الاحتياطي تعمل بالكامل بدون تسجيل دخول.</string>
+    <string name="account_sign_in_google">تسجيل الدخول عبر قوقل</string>
+    <string name="account_sign_out">تسجيل الخروج</string>
+    <string name="account_sync_now">مزامنة الآن</string>
+    <string name="account_apply_prefs">استعادة تفضيلات السحابة</string>
+    <string name="account_linked_devices">الأجهزة المرتبطة (%1$d)</string>
+    <string name="account_this_device_badge">هذا الجهاز</string>
+    <string name="account_synced_transfers_count">التحويلات المزامنة سحابياً: %1$d</string>
+    <string name="account_remove_device">إلغاء ربط الجهاز</string>
+    <string name="account_signed_in_msg">تم تسجيل الدخول بحساب قوقل والمزامنة</string>
+    <string name="account_sign_in_failed">تعذر تسجيل الدخول عبر قوقل</string>
+    <string name="account_signed_out_msg">تم تسجيل الخروج من حساب قوقل</string>
+    <string name="account_sync_done">اكتملت المزامنة السحابية</string>
+    <string name="account_sync_failed">فشلت المزامنة السحابية</string>
+    <string name="account_prefs_applied">تم تطبيق التفضيلات من السحابة</string>
+    <string name="hub_view_group">عرض المجموعة</string>
+    <string name="hub_global_join_alert">%1$s يطلب الانضمام إلى مجموعتك</string>
 </resources>

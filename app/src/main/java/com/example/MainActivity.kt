@@ -8,18 +8,28 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Folder
@@ -27,10 +37,17 @@ import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Assessment
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -41,20 +58,30 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.AccountAuthState
+import com.example.data.CloudSyncUiState
+import com.example.data.RegisteredDevice
+import com.example.data.SyncedTransferRecord
+import com.example.p2p.GroupRole
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -160,6 +187,10 @@ class MainActivity : FragmentActivity() {
             val pendingExternalShareUris by viewModel.pendingExternalShareUris.collectAsStateWithLifecycle()
             val storageSpaceInfo by viewModel.storageSpaceInfo.collectAsStateWithLifecycle()
             val tempCacheBytes by viewModel.tempCacheBytes.collectAsStateWithLifecycle()
+            val accountAuthState by viewModel.accountAuthState.collectAsStateWithLifecycle()
+            val cloudDevicesState by viewModel.cloudDevicesState.collectAsStateWithLifecycle()
+            val cloudTransfersState by viewModel.cloudTransfersState.collectAsStateWithLifecycle()
+            val cloudSyncBusy by viewModel.cloudSyncBusy.collectAsStateWithLifecycle()
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -213,7 +244,11 @@ class MainActivity : FragmentActivity() {
                             openGroupTabTick = openGroupTabTick,
                             pendingExternalShareUris = pendingExternalShareUris,
                             storageSpaceInfo = storageSpaceInfo,
-                            tempCacheBytes = tempCacheBytes
+                            tempCacheBytes = tempCacheBytes,
+                            accountAuthState = accountAuthState,
+                            cloudDevicesState = cloudDevicesState,
+                            cloudTransfersState = cloudTransfersState,
+                            cloudSyncBusy = cloudSyncBusy
                         )
                     }
                 }
@@ -249,8 +284,13 @@ private fun MainAdaptiveScaffold(
     openGroupTabTick: Int,
     pendingExternalShareUris: List<Uri>,
     storageSpaceInfo: com.example.data.StorageSpaceInfo?,
-    tempCacheBytes: Long
+    tempCacheBytes: Long,
+    accountAuthState: AccountAuthState,
+    cloudDevicesState: CloudSyncUiState<List<RegisteredDevice>>,
+    cloudTransfersState: CloudSyncUiState<List<SyncedTransferRecord>>,
+    cloudSyncBusy: Boolean
 ) {
+    val activityContext = LocalContext.current
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: ROUTE_GROUP
@@ -350,11 +390,94 @@ private fun MainAdaptiveScaffold(
                     }
                 }
 
-                Box(modifier = Modifier.weight(1f)) {
-                    NavHost(
-                        navController = navController,
-                        startDestination = ROUTE_GROUP
+                Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+                    AnimatedVisibility(
+                        visible = currentRoute != ROUTE_GROUP &&
+                            groupState.role == GroupRole.HOST &&
+                            groupState.pendingRequests.isNotEmpty()
                     ) {
+                        val firstReq = groupState.pendingRequests.firstOrNull()
+                        if (firstReq != null) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("global_join_request_banner"),
+                                shape = RoundedCornerShape(18.dp),
+                                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.NotificationsActive,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = stringResource(R.string.hub_global_join_alert, firstReq.deviceName),
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (groupState.pendingRequests.size > 1) {
+                                                Text(
+                                                    text = stringResource(R.string.hub_pending_requests, groupState.pendingRequests.size),
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        FilledTonalButton(
+                                            onClick = { viewModel.respondJoinRequest(firstReq.requestId, false) },
+                                            modifier = Modifier
+                                                .height(48.dp)
+                                                .testTag("global_join_reject_button")
+                                        ) {
+                                            Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.hub_reject), modifier = Modifier.size(18.dp))
+                                        }
+                                        Button(
+                                            onClick = { viewModel.respondJoinRequest(firstReq.requestId, true) },
+                                            modifier = Modifier
+                                                .height(48.dp)
+                                                .testTag("global_join_approve_button")
+                                        ) {
+                                            Icon(Icons.Rounded.Check, contentDescription = stringResource(R.string.hub_approve), modifier = Modifier.size(18.dp))
+                                        }
+                                        TextButton(
+                                            onClick = { navigateTab(ROUTE_GROUP) },
+                                            modifier = Modifier
+                                                .height(48.dp)
+                                                .testTag("global_join_view_group_button")
+                                        ) {
+                                            Text(stringResource(R.string.hub_view_group))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        NavHost(
+                            navController = navController,
+                            startDestination = ROUTE_GROUP
+                        ) {
                         composable(ROUTE_GROUP) {
                             GroupHubScreen(
                                 deviceName = settings.deviceName,
@@ -381,8 +504,8 @@ private fun MainAdaptiveScaffold(
                                     viewModel.setAutoReceiveFiles(enabled)
                                 },
                                 onParseQr = { raw -> viewModel.parseScannedQr(raw) },
-                                onJoinViaDirectCredentials = { ssid, pass, ip, port, name, pin, hostMac ->
-                                    viewModel.joinViaDirectCredentials(ssid, pass, ip, port, name, pin, hostMac)
+                                onJoinViaDirectCredentials = { ssid, pass, ip, port, name, pin, hostMac, groupId, frequency ->
+                                    viewModel.joinViaDirectCredentials(ssid, pass, ip, port, name, pin, hostMac, groupId, frequency)
                                 },
                                 onCreateGroup = { name, pin, auto, web ->
                                     viewModel.createGroup(name, pin, auto, web)
@@ -508,6 +631,15 @@ private fun MainAdaptiveScaffold(
                                 permissions = permissions,
                                 tempCacheBytes = tempCacheBytes,
                                 isWideScreen = useRail,
+                                accountAuthState = accountAuthState,
+                                cloudDevicesState = cloudDevicesState,
+                                cloudTransfersState = cloudTransfersState,
+                                cloudSyncBusy = cloudSyncBusy,
+                                onSignInGoogle = { ctx -> viewModel.signInWithGoogle(ctx) },
+                                onSignOutGoogle = { viewModel.signOutGoogle() },
+                                onSyncCloudNow = { viewModel.syncCloudNow(silent = false) },
+                                onApplyCloudPrefs = { viewModel.applyCloudPreferences() },
+                                onRemoveCloudDevice = { devId -> viewModel.removeCloudDevice(devId) },
                                 onSetDeviceName = { viewModel.setDeviceName(it) },
                                 onSetLanguage = { viewModel.setLanguage(it) },
                                 onSetSaveMode = { viewModel.setSaveMode(it) },
@@ -555,6 +687,7 @@ private fun MainAdaptiveScaffold(
                                 onClearBackupStatus = { viewModel.clearBackupStatus() }
                             )
                         }
+                    }
                     }
                 }
             }

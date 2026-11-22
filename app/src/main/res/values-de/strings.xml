@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">Gesendet — wartet</string>
     <string name="hub_resend">Erneut senden</string>
     <string name="hub_paste_send">Einfügen &amp; senden</string>
+    <string name="account_section_title">Google-Konto &amp; Cloud-Sync (Optional)</string>
+    <string name="account_optional_hint">Optional — Offline-Übertragungen, Tresor und Backups funktionieren ohne Anmeldung.</string>
+    <string name="account_sign_in_google">Mit Google anmelden</string>
+    <string name="account_sign_out">Abmelden</string>
+    <string name="account_sync_now">Jetzt synchronisieren</string>
+    <string name="account_apply_prefs">Cloud-Einstellungen laden</string>
+    <string name="account_linked_devices">Verknüpfte Geräte (%1$d)</string>
+    <string name="account_this_device_badge">Dieses Gerät</string>
+    <string name="account_synced_transfers_count">Synchronisierte Übertragungen: %1$d</string>
+    <string name="account_remove_device">Gerät trennen</string>
+    <string name="account_signed_in_msg">Mit Google angemeldet</string>
+    <string name="account_sign_in_failed">Google-Anmeldung fehlgeschlagen</string>
+    <string name="account_signed_out_msg">Abgemeldet</string>
+    <string name="account_sync_done">Cloud-Sync abgeschlossen</string>
+    <string name="account_sync_failed">Cloud-Sync fehlgeschlagen</string>
+    <string name="account_prefs_applied">Cloud-Einstellungen übernommen</string>
+    <string name="hub_view_group">Gruppe ansehen</string>
+    <string name="hub_global_join_alert">%1$s möchte deiner Gruppe beitreten</string>
 </resources>

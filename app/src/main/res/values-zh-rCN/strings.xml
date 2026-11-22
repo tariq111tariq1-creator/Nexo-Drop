@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">已发送 — 等待下载</string>
     <string name="hub_resend">重新发送</string>
     <string name="hub_paste_send">粘贴并发送</string>
+    <string name="account_section_title">Google 账号与云同步（可选）</string>
+    <string name="account_optional_hint">可选 — 离线传输、保险箱和备份无需登录即可完整使用。</string>
+    <string name="account_sign_in_google">使用 Google 登录</string>
+    <string name="account_sign_out">退出登录</string>
+    <string name="account_sync_now">立即同步</string>
+    <string name="account_apply_prefs">恢复云端偏好设置</string>
+    <string name="account_linked_devices">已关联设备 (%1$d)</string>
+    <string name="account_this_device_badge">当前设备</string>
+    <string name="account_synced_transfers_count">已同步传输记录：%1$d</string>
+    <string name="account_remove_device">解除关联</string>
+    <string name="account_signed_in_msg">已通过 Google 登录并同步</string>
+    <string name="account_sign_in_failed">Google 登录失败</string>
+    <string name="account_signed_out_msg">已退出 Google 账号</string>
+    <string name="account_sync_done">云同步已完成</string>
+    <string name="account_sync_failed">云同步失败</string>
+    <string name="account_prefs_applied">已应用云端偏好设置</string>
+    <string name="hub_view_group">查看群组</string>
+    <string name="hub_global_join_alert">%1$s 请求加入您的群组</string>
 </resources>

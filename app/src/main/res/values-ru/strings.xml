@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">Отправлено — ожидание</string>
     <string name="hub_resend">Повторить</string>
     <string name="hub_paste_send">Вставить и отправить</string>
+    <string name="account_section_title">Аккаунт Google и облако (необязательно)</string>
+    <string name="account_optional_hint">Необязательно — офлайн-передача, сейф и копии работают без входа.</string>
+    <string name="account_sign_in_google">Войти через Google</string>
+    <string name="account_sign_out">Выйти</string>
+    <string name="account_sync_now">Синхронизировать</string>
+    <string name="account_apply_prefs">Восстановить настройки</string>
+    <string name="account_linked_devices">Связанные устройства (%1$d)</string>
+    <string name="account_this_device_badge">Это устройство</string>
+    <string name="account_synced_transfers_count">Синхронизировано передач: %1$d</string>
+    <string name="account_remove_device">Отвязать</string>
+    <string name="account_signed_in_msg">Вход через Google выполнен</string>
+    <string name="account_sign_in_failed">Ошибка входа Google</string>
+    <string name="account_signed_out_msg">Выход выполнен</string>
+    <string name="account_sync_done">Синхронизация завершена</string>
+    <string name="account_sync_failed">Ошибка синхронизации</string>
+    <string name="account_prefs_applied">Облачные настройки применены</string>
+    <string name="hub_view_group">Открыть группу</string>
+    <string name="hub_global_join_alert">%1$s хочет присоединиться к группе</string>
 </resources>

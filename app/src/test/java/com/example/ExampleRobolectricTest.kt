@@ -60,7 +60,7 @@ class ExampleRobolectricTest {
         val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
         val vm = MainViewModel(app)
 
-        val jsonQr = """{"t":"nx_direct","ssid":"DIRECT-xy-Nexo","pass":"pass1234","ip":"192.168.49.1","port":45892,"name":"MyGroup","pin":true,"mac":"aa:bb:cc:dd:ee:ff","freq":5180}"""
+        val jsonQr = """{"t":"nx_direct","ssid":"DIRECT-xy-Nexo","pass":"pass1234","ip":"192.168.49.1","port":45892,"name":"MyGroup","pin":true,"mac":"aa:bb:cc:dd:ee:ff","freq":5180,"gid":"grp999"}"""
         val parsedJson = vm.parseScannedQr(jsonQr)
         assertEquals("DIRECT-xy-Nexo", parsedJson?.ssid)
         assertEquals("pass1234", parsedJson?.passphrase)
@@ -70,6 +70,7 @@ class ExampleRobolectricTest {
         assertEquals(true, parsedJson?.hasPin)
         assertEquals("aa:bb:cc:dd:ee:ff", parsedJson?.hostMac)
         assertEquals(5180, parsedJson?.frequency)
+        assertEquals("grp999", parsedJson?.groupId)
 
         assertEquals(0, vm.joinApprovalFocusTick.value)
         vm.triggerFocusJoinApproval()
@@ -178,6 +179,64 @@ class ExampleRobolectricTest {
         )
         assertEquals("dev-1", ws.myDeviceId)
         assertEquals(listOf("Pixel 8"), ws.deliveryReceipts["item_01"])
+    }
+
+    @Test
+    fun `cryptoEngine writeEncryptedChunk roundtrips large buffered streams accurately`() {
+        val hostKeys = CryptoEngine.generateEphemeralEcKeyPair()
+        val peerKeys = CryptoEngine.generateEphemeralEcKeyPair()
+        val salt = "nexodrop-hkdf-v1".toByteArray()
+        val (hostSession, _) = CryptoEngine.deriveSessionKey(hostKeys, peerKeys.public.encoded, salt)
+        val (peerSession, _) = CryptoEngine.deriveSessionKey(peerKeys, hostKeys.public.encoded, salt)
+
+        val payload = ByteArray(600 * 1024) { idx -> (idx * 31 and 0xFF).toByte() }
+        val baos = java.io.ByteArrayOutputStream()
+        val dos = java.io.DataOutputStream(java.io.BufferedOutputStream(baos, 256 * 1024))
+        CryptoEngine.writeEncryptedChunk(dos, hostSession, payload, 0, 262_144, flush = false)
+        CryptoEngine.writeEncryptedChunk(dos, hostSession, payload, 262_144, payload.size - 262_144, flush = false)
+        CryptoEngine.writeEncryptedFrame(dos, hostSession, ByteArray(0))
+        dos.flush()
+
+        val dis = java.io.DataInputStream(java.io.ByteArrayInputStream(baos.toByteArray()))
+        val reconstructed = java.io.ByteArrayOutputStream()
+        while (true) {
+            val frame = CryptoEngine.readEncryptedFrame(dis, peerSession)
+            if (frame.isEmpty()) break
+            reconstructed.write(frame)
+        }
+        assertArrayEquals(payload, reconstructed.toByteArray())
+    }
+
+    @Test
+    fun `storageRepository deterministic partial file resumes offset and survives normal cache clear`() {
+        val app = ApplicationProvider.getApplicationContext<NexoDropApplication>()
+        val sourceFile = java.io.File(app.cacheDir, "resume_src.bin").apply {
+            writeBytes(ByteArray(1024) { i -> (i and 0x7F).toByte() })
+        }
+        val partialFile = app.storageRepository.getDeterministicPartialFile("movie_clip.mp4", 1024L)
+        try {
+            partialFile.writeBytes(ByteArray(256))
+            app.storageRepository.clearTempTransferCache(includePartialDownloads = false)
+            assertTrue("Partial file must survive session cache clear for cross-QR resume", partialFile.exists())
+            assertEquals(256L, partialFile.length())
+
+            val (stream, actualOffset) = app.storageRepository.openSeekableStreamAt(
+                uri = null,
+                filePath = sourceFile.absolutePath,
+                fileName = "movie_clip.mp4",
+                stripExif = false,
+                offset = 256L
+            )
+            assertEquals(256L, actualOffset)
+            stream.use {
+                val remaining = it.readBytes()
+                assertEquals(768, remaining.size)
+                assertEquals((256 and 0x7F).toByte(), remaining[0])
+            }
+        } finally {
+            sourceFile.delete()
+            partialFile.delete()
+        }
     }
 
     @Test

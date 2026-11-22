@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">Envoyé — en attente</string>
     <string name="hub_resend">Renvoyer</string>
     <string name="hub_paste_send">Coller &amp; envoyer</string>
+    <string name="account_section_title">Compte Google &amp; Synchro Cloud (Optionnel)</string>
+    <string name="account_optional_hint">Optionnel — transferts hors ligne, coffre et sauvegardes fonctionnent sans connexion.</string>
+    <string name="account_sign_in_google">Se connecter avec Google</string>
+    <string name="account_sign_out">Déconnexion</string>
+    <string name="account_sync_now">Synchroniser</string>
+    <string name="account_apply_prefs">Restaurer préférences</string>
+    <string name="account_linked_devices">Appareils liés (%1$d)</string>
+    <string name="account_this_device_badge">Cet appareil</string>
+    <string name="account_synced_transfers_count">Transferts synchronisés : %1$d</string>
+    <string name="account_remove_device">Dissocier</string>
+    <string name="account_signed_in_msg">Connecté avec Google</string>
+    <string name="account_sign_in_failed">Échec de connexion Google</string>
+    <string name="account_signed_out_msg">Déconnecté</string>
+    <string name="account_sync_done">Synchronisation terminée</string>
+    <string name="account_sync_failed">Échec de synchronisation</string>
+    <string name="account_prefs_applied">Préférences appliquées</string>
+    <string name="hub_view_group">Voir groupe</string>
+    <string name="hub_global_join_alert">%1$s souhaite rejoindre votre groupe</string>
 </resources>

@@ -37,12 +37,15 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import kotlin.coroutines.resume
 
 sealed class DirectDiscoveryEvent {
     data class WifiDirectBecameGroupOwner(val ownerIp: String, val ssid: String, val passphrase: String) : DirectDiscoveryEvent()
@@ -75,6 +78,7 @@ class DiscoveryManager(
         private const val P2P_SERVICE_NAME = "nexodrop"
         private const val P2P_SERVICE_TYPE = "_nexodrop._tcp"
         private const val UDP_DISCOVERY_PORT = 45891
+        private const val ACTION_SUCCESS = -1
     }
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
@@ -95,11 +99,14 @@ class DiscoveryManager(
 
     private var localP2pServiceInfo: WifiP2pDnsSdServiceInfo? = null
     private val discoveredP2pServices = LinkedHashMap<String, WifiDirectPeer>()
+    private val discoveredGroupIdsByAddress = LinkedHashMap<String, String>()
 
     private var udpListenerJob: Job? = null
     private var udpBeaconJob: Job? = null
     private var p2pDiscoveryLoopJob: Job? = null
     private var p2pReceiverRegistered = false
+    private var qrConnectJob: Job? = null
+    private var peerConnectJob: Job? = null
 
     private val _discoveredGroups = MutableStateFlow<List<DiscoveredGroup>>(emptyList())
     val discoveredGroups: StateFlow<List<DiscoveredGroup>> = _discoveredGroups.asStateFlow()
@@ -110,8 +117,12 @@ class DiscoveryManager(
     private val _events = MutableSharedFlow<DirectDiscoveryEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<DirectDiscoveryEvent> = _events.asSharedFlow()
 
+    @Volatile
     private var isExpectingClientP2pAutoConnect = false
+    @Volatile
     private var isWifiP2pEnabled = true
+    @Volatile
+    private var localDeviceAddress: String = ""
 
     private val p2pReceiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
@@ -127,6 +138,18 @@ class DiscoveryManager(
                         _wifiDirectState.value = _wifiDirectState.value.copy(
                             statusMessage = "Wi-Fi Direct disabled in system Wi-Fi"
                         )
+                    }
+                }
+                WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
+                    val dev: WifiP2pDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE, WifiP2pDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE)
+                    }
+                    val addr = dev?.deviceAddress.orEmpty()
+                    if (addr.isNotBlank() && addr != "02:00:00:00:00:00") {
+                        localDeviceAddress = addr
                     }
                 }
                 WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
@@ -145,7 +168,10 @@ class DiscoveryManager(
                                     servicePort = svc?.servicePort ?: 45892,
                                     hasPin = svc?.hasPin ?: false
                                 )
-                            }?.sortedByDescending { it.isNexoService } ?: emptyList()
+                            }?.sortedWith(
+                                compareByDescending<WifiDirectPeer> { it.isNexoService }
+                                    .thenBy { it.status == WifiP2pDevice.FAILED }
+                            ) ?: emptyList()
                             _wifiDirectState.value = _wifiDirectState.value.copy(discoveredPeers = rawPeers)
                         }
                     }
@@ -153,18 +179,22 @@ class DiscoveryManager(
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
                     val manager = p2pManager ?: return
                     val channel = p2pChannel ?: return
-                    manager.requestConnectionInfo(channel) { info: WifiP2pInfo? ->
-                        if (info != null && info.groupFormed) {
-                            val ownerIp = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
-                            _wifiDirectState.value = _wifiDirectState.value.copy(
-                                groupActive = true,
-                                groupOwnerIp = ownerIp
-                            )
-                            isExpectingClientP2pAutoConnect = false
-                            if (info.isGroupOwner) {
-                                fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                    runCatching {
+                        manager.requestConnectionInfo(channel) { info: WifiP2pInfo? ->
+                            if (info != null && info.groupFormed) {
+                                val ownerIp = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                                _wifiDirectState.value = _wifiDirectState.value.copy(
+                                    groupActive = true,
+                                    groupOwnerIp = ownerIp
+                                )
+                                isExpectingClientP2pAutoConnect = false
+                                if (info.isGroupOwner) {
+                                    fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                                } else {
+                                    _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
+                                }
                             } else {
-                                _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
+                                _wifiDirectState.value = _wifiDirectState.value.copy(groupActive = false)
                             }
                         }
                     }
@@ -173,39 +203,127 @@ class DiscoveryManager(
         }
     }
 
+    init {
+        // Register P2P receiver eagerly so isWifiP2pEnabled & peer events are always up to date from app launch
+        ensureP2pInitialized()
+    }
+
+    private suspend fun awaitP2pAction(
+        timeoutMs: Long = 2_000L,
+        action: (WifiP2pManager.ActionListener) -> Unit
+    ): Int {
+        return withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine { cont ->
+                runCatching {
+                    action(object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            if (cont.isActive) cont.resume(ACTION_SUCCESS)
+                        }
+                        override fun onFailure(reason: Int) {
+                            if (cont.isActive) cont.resume(reason)
+                        }
+                    })
+                }.onFailure {
+                    if (cont.isActive) cont.resume(WifiP2pManager.ERROR)
+                }
+            }
+        } ?: WifiP2pManager.BUSY
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestGroupInfoSuspend(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel
+    ): WifiP2pGroup? {
+        return withTimeoutOrNull(1_800L) {
+            suspendCancellableCoroutine { cont ->
+                runCatching {
+                    manager.requestGroupInfo(channel) { group ->
+                        if (cont.isActive) cont.resume(group)
+                    }
+                }.onFailure {
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestConnectionInfoSuspend(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel
+    ): WifiP2pInfo? {
+        return withTimeoutOrNull(1_800L) {
+            suspendCancellableCoroutine { cont ->
+                runCatching {
+                    manager.requestConnectionInfo(channel) { info ->
+                        if (cont.isActive) cont.resume(info)
+                    }
+                }.onFailure {
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestLocalP2pMacSuspend(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel
+    ): String {
+        if (localDeviceAddress.isNotBlank() && localDeviceAddress != "02:00:00:00:00:00") {
+            return localDeviceAddress
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return ""
+        val addr = withTimeoutOrNull(1_200L) {
+            suspendCancellableCoroutine { cont ->
+                runCatching {
+                    manager.requestDeviceInfo(channel) { device ->
+                        val mac = device?.deviceAddress
+                            ?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" }
+                            ?: ""
+                        if (cont.isActive) cont.resume(mac)
+                    }
+                }.onFailure {
+                    if (cont.isActive) cont.resume("")
+                }
+            }
+        } ?: ""
+        if (addr.isNotBlank()) localDeviceAddress = addr
+        return addr
+    }
+
     @SuppressLint("MissingPermission")
     private fun fetchGroupCredentialsWithRetry(ownerIp: String, emitOwnerFormed: Boolean = false) {
         val manager = p2pManager ?: return
         val channel = p2pChannel ?: return
         scope.launch {
+            val cachedMac = requestLocalP2pMacSuspend(manager, channel)
             var resolved = false
-            repeat(6) {
+            repeat(10) { attempt ->
                 if (resolved) return@launch
-                runCatching {
-                    manager.requestGroupInfo(channel) { group: WifiP2pGroup? ->
-                        if (!resolved && group != null && !group.networkName.isNullOrBlank()) {
-                            resolved = true
-                            val ssid = group.networkName ?: ""
-                            val pass = group.passphrase ?: ""
-                            val freq = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) group.frequency else 0
-                            val mac = group.owner?.deviceAddress
-                                ?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" }
-                                ?: ""
-                            _wifiDirectState.value = _wifiDirectState.value.copy(
-                                groupActive = true,
-                                ssid = ssid,
-                                passphrase = pass,
-                                groupOwnerIp = ownerIp,
-                                statusMessage = "Wi-Fi Direct: $ssid"
-                            )
-                            _events.tryEmit(DirectDiscoveryEvent.WifiDirectCredentialsReady(ssid, pass, ownerIp, freq, mac))
-                            if (emitOwnerFormed) {
-                                _events.tryEmit(DirectDiscoveryEvent.WifiDirectBecameGroupOwner(ownerIp, ssid, pass))
-                            }
-                        }
+                if (attempt > 0) delay(350)
+                val group = requestGroupInfoSuspend(manager, channel)
+                if (group != null && !group.networkName.isNullOrBlank()) {
+                    resolved = true
+                    val ssid = group.networkName ?: ""
+                    val pass = group.passphrase ?: ""
+                    val freq = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) group.frequency else 0
+                    val groupOwnerMac = group.owner?.deviceAddress
+                        ?.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" }
+                        ?: cachedMac
+                    _wifiDirectState.value = _wifiDirectState.value.copy(
+                        groupActive = true,
+                        ssid = ssid,
+                        passphrase = pass,
+                        groupOwnerIp = ownerIp,
+                        statusMessage = "Wi-Fi Direct: $ssid"
+                    )
+                    _events.tryEmit(DirectDiscoveryEvent.WifiDirectCredentialsReady(ssid, pass, ownerIp, freq, groupOwnerMac))
+                    if (emitOwnerFormed) {
+                        _events.tryEmit(DirectDiscoveryEvent.WifiDirectBecameGroupOwner(ownerIp, ssid, pass))
                     }
                 }
-                delay(650)
             }
             if (emitOwnerFormed && !resolved) {
                 _events.tryEmit(DirectDiscoveryEvent.WifiDirectBecameGroupOwner(ownerIp, "", ""))
@@ -247,6 +365,24 @@ class DiscoveryManager(
             ?: "127.0.0.1"
     }
 
+    /**
+     * Waits briefly for p2p0 / SoftAP DHCP interface to receive its local 192.168.49.* or 192.168.43.*
+     * address before attempting TCP socket connections (prevents cellular interface routing failures).
+     */
+    suspend fun waitForDirectSubnetIp(maxWaitMs: Long = 4_500L): String? {
+        val deadline = System.currentTimeMillis() + maxWaitMs
+        while (System.currentTimeMillis() < deadline) {
+            val directIp = getLocalIpv4Addresses().firstOrNull {
+                it.startsWith("192.168.49.") || it.startsWith("192.168.43.")
+            }
+            if (directIp != null) return directIp
+            delay(200)
+        }
+        return getLocalIpv4Addresses().firstOrNull {
+            it.startsWith("192.168.49.") || it.startsWith("192.168.43.")
+        }
+    }
+
     // =========================================================================
     // PRIMARY: Direct Device-to-Device (Wi-Fi Direct + LocalOnlyHotspot)
     // =========================================================================
@@ -278,95 +414,86 @@ class DiscoveryManager(
             return
         }
 
-        // CRITICAL for Android 11 (API 30) & older HALs:
-        // Cancel ongoing peer/service discovery first so createGroup doesn't fail with BUSY!
-        stopDirectPeerDiscovery()
-        runCatching { manager.cancelConnect(channel, null) }
-        runCatching { manager.clearServiceRequests(channel, null) }
+        // Stop periodic discovery loop immediately so it doesn't race during createGroup
+        p2pDiscoveryLoopJob?.cancel()
+        p2pDiscoveryLoopJob = null
 
-        // Register NexoDrop DNS-SD Service over Wi-Fi Direct
-        val record = mapOf(
-            "gid" to groupId,
-            "gname" to groupName.take(28),
-            "hname" to hostDeviceName.take(24),
-            "port" to port.toString(),
-            "pin" to if (hasPin) "1" else "0"
-        )
-        localP2pServiceInfo?.let { prev ->
-            runCatching { manager.removeLocalService(channel, prev, null) }
-        }
-        val serviceInfo = WifiP2pDnsSdServiceInfo.newInstance(P2P_SERVICE_NAME, P2P_SERVICE_TYPE, record)
-        localP2pServiceInfo = serviceInfo
-        runCatching { manager.addLocalService(channel, serviceInfo, null) }
-
-        // Wait briefly for Android 11 wpa_supplicant to exit discovery state, then remove stale group only if needed
         scope.launch {
-            delay(280)
-            runCatching {
-                manager.requestGroupInfo(channel) { existingGroup ->
-                    if (existingGroup != null) {
-                        manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                            override fun onSuccess() {
-                                scope.launch {
-                                    delay(380)
-                                    createP2pGroupInternal(manager, channel, retryOnBusy = true)
-                                }
-                            }
-                            override fun onFailure(reason: Int) {
-                                scope.launch {
-                                    delay(300)
-                                    createP2pGroupInternal(manager, channel, retryOnBusy = true)
-                                }
-                            }
-                        })
-                    } else {
-                        createP2pGroupInternal(manager, channel, retryOnBusy = true)
-                    }
-                }
-            }.onFailure {
-                createP2pGroupInternal(manager, channel, retryOnBusy = true)
+            // Sequential cleanup for Android 11 (API 30) & older HALs so wpa_supplicant exits scan/connect cleanly
+            awaitP2pAction(1_200L) { manager.stopPeerDiscovery(channel, it) }
+            awaitP2pAction(1_000L) { manager.clearServiceRequests(channel, it) }
+
+            val record = mapOf(
+                "gid" to groupId,
+                "gname" to groupName.take(28),
+                "hname" to hostDeviceName.take(24),
+                "port" to port.toString(),
+                "pin" to if (hasPin) "1" else "0"
+            )
+            localP2pServiceInfo?.let { prev ->
+                awaitP2pAction(1_000L) { manager.removeLocalService(channel, prev, it) }
             }
+            val serviceInfo = WifiP2pDnsSdServiceInfo.newInstance(P2P_SERVICE_NAME, P2P_SERVICE_TYPE, record)
+            localP2pServiceInfo = serviceInfo
+            awaitP2pAction(1_200L) { manager.addLocalService(channel, serviceInfo, it) }
+
+            val existingGroup = requestGroupInfoSuspend(manager, channel)
+            if (existingGroup != null) {
+                awaitP2pAction(2_000L) { manager.removeGroup(channel, it) }
+                delay(420)
+            } else {
+                // Only cancel pending outgoing connect if no active group exists
+                awaitP2pAction(800L) { manager.cancelConnect(channel, it) }
+                delay(220)
+            }
+
+            createP2pGroupWithRetry(manager, channel, remainingRetries = 3)
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun createP2pGroupInternal(
+    private suspend fun createP2pGroupWithRetry(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
-        retryOnBusy: Boolean
+        remainingRetries: Int
     ) {
-        runCatching {
-            manager.createGroup(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    _wifiDirectState.value = _wifiDirectState.value.copy(
-                        groupActive = true,
-                        groupOwnerIp = "192.168.49.1",
-                        statusMessage = "Wi-Fi Direct Group Active"
-                    )
-                    fetchGroupCredentialsWithRetry("192.168.49.1")
-                }
+        val delays = longArrayOf(550L, 950L, 1400L)
+        var attempt = 0
+        while (attempt <= remainingRetries) {
+            val result = awaitP2pAction(4_000L) { manager.createGroup(channel, it) }
+            if (result == ACTION_SUCCESS) {
+                _wifiDirectState.value = _wifiDirectState.value.copy(
+                    groupActive = true,
+                    groupOwnerIp = "192.168.49.1",
+                    statusMessage = "Wi-Fi Direct Group Active"
+                )
+                fetchGroupCredentialsWithRetry("192.168.49.1")
+                return
+            }
 
-                override fun onFailure(reason: Int) {
-                    if (retryOnBusy && reason == WifiP2pManager.BUSY) {
-                        scope.launch {
-                            runCatching { manager.stopPeerDiscovery(channel, null) }
-                            delay(500)
-                            createP2pGroupInternal(manager, channel, retryOnBusy = false)
-                        }
-                        return
-                    }
-                    val reasonText = when (reason) {
-                        WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
-                        WifiP2pManager.BUSY -> "BUSY"
-                        else -> "ERROR ($reason)"
-                    }
-                    _wifiDirectState.value = _wifiDirectState.value.copy(
-                        statusMessage = "Wi-Fi Direct: $reasonText — starting Direct Hotspot"
-                    )
-                    // Automatic fallback to Direct Hotspot!
-                    startLocalOnlyHotspot()
+            val shouldRetry = (result == WifiP2pManager.BUSY || result == WifiP2pManager.ERROR) && attempt < remainingRetries
+            if (!shouldRetry) {
+                val reasonText = when (result) {
+                    WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
+                    WifiP2pManager.BUSY -> "BUSY"
+                    else -> "ERROR ($result)"
                 }
-            })
+                _wifiDirectState.value = _wifiDirectState.value.copy(
+                    statusMessage = "Wi-Fi Direct: $reasonText — starting Direct Hotspot"
+                )
+                startLocalOnlyHotspot()
+                return
+            }
+
+            // Before retrying on Android 11 HAL, ensure peer discovery & stale group are cleared
+            awaitP2pAction(1_000L) { manager.stopPeerDiscovery(channel, it) }
+            val stale = requestGroupInfoSuspend(manager, channel)
+            if (stale != null) {
+                awaitP2pAction(1_500L) { manager.removeGroup(channel, it) }
+            }
+            val backoff = delays.getOrElse(attempt) { 1200L }
+            delay(backoff)
+            attempt++
         }
     }
 
@@ -446,42 +573,7 @@ class DiscoveryManager(
         ensureP2pInitialized()
         val channel = p2pChannel ?: return
 
-        // Setup DNS-SD listeners for NexoDrop P2P hosts
-        runCatching {
-            manager.setDnsSdResponseListeners(
-                channel,
-                { instanceName, _, srcDevice ->
-                    if (instanceName.contains(P2P_SERVICE_NAME, ignoreCase = true)) {
-                        val existing = discoveredP2pServices[srcDevice.deviceAddress]
-                        discoveredP2pServices[srcDevice.deviceAddress] = (existing ?: WifiDirectPeer(
-                            deviceName = srcDevice.deviceName,
-                            deviceAddress = srcDevice.deviceAddress,
-                            status = srcDevice.status,
-                            isNexoService = true
-                        )).copy(isNexoService = true)
-                    }
-                },
-                { _, txtRecordMap, srcDevice ->
-                    val gname = txtRecordMap["gname"] ?: srcDevice.deviceName
-                    val port = txtRecordMap["port"]?.toIntOrNull() ?: 45892
-                    val hasPin = txtRecordMap["pin"] == "1"
-                    discoveredP2pServices[srcDevice.deviceAddress] = WifiDirectPeer(
-                        deviceName = srcDevice.deviceName,
-                        deviceAddress = srcDevice.deviceAddress,
-                        status = srcDevice.status,
-                        isNexoService = true,
-                        serviceGroupName = gname,
-                        servicePort = port,
-                        hasPin = hasPin
-                    )
-                    // Refresh peer list immediately
-                    val merged = _wifiDirectState.value.discoveredPeers.map { p ->
-                        if (p.deviceAddress == srcDevice.deviceAddress) discoveredP2pServices[srcDevice.deviceAddress]!! else p
-                    }.ifEmpty { discoveredP2pServices.values.toList() }
-                    _wifiDirectState.value = _wifiDirectState.value.copy(discoveredPeers = merged)
-                }
-            )
-        }
+        attachDnsSdListeners(manager, channel)
 
         p2pDiscoveryLoopJob?.cancel()
         p2pDiscoveryLoopJob = scope.launch {
@@ -514,6 +606,48 @@ class DiscoveryManager(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun attachDnsSdListeners(manager: WifiP2pManager, channel: WifiP2pManager.Channel) {
+        runCatching {
+            manager.setDnsSdResponseListeners(
+                channel,
+                { instanceName, _, srcDevice ->
+                    if (instanceName.contains(P2P_SERVICE_NAME, ignoreCase = true)) {
+                        val existing = discoveredP2pServices[srcDevice.deviceAddress]
+                        discoveredP2pServices[srcDevice.deviceAddress] = (existing ?: WifiDirectPeer(
+                            deviceName = srcDevice.deviceName,
+                            deviceAddress = srcDevice.deviceAddress,
+                            status = srcDevice.status,
+                            isNexoService = true
+                        )).copy(isNexoService = true)
+                    }
+                },
+                { _, txtRecordMap, srcDevice ->
+                    val gid = txtRecordMap["gid"] ?: ""
+                    if (gid.isNotBlank()) {
+                        discoveredGroupIdsByAddress[srcDevice.deviceAddress] = gid
+                    }
+                    val gname = txtRecordMap["gname"] ?: srcDevice.deviceName
+                    val port = txtRecordMap["port"]?.toIntOrNull() ?: 45892
+                    val hasPin = txtRecordMap["pin"] == "1"
+                    discoveredP2pServices[srcDevice.deviceAddress] = WifiDirectPeer(
+                        deviceName = srcDevice.deviceName,
+                        deviceAddress = srcDevice.deviceAddress,
+                        status = srcDevice.status,
+                        isNexoService = true,
+                        serviceGroupName = gname,
+                        servicePort = port,
+                        hasPin = hasPin
+                    )
+                    val merged = _wifiDirectState.value.discoveredPeers.map { p ->
+                        if (p.deviceAddress == srcDevice.deviceAddress) discoveredP2pServices[srcDevice.deviceAddress]!! else p
+                    }.ifEmpty { discoveredP2pServices.values.toList() }
+                    _wifiDirectState.value = _wifiDirectState.value.copy(discoveredPeers = merged)
+                }
+            )
+        }
+    }
+
     fun stopDirectPeerDiscovery() {
         p2pDiscoveryLoopJob?.cancel()
         p2pDiscoveryLoopJob = null
@@ -522,54 +656,117 @@ class DiscoveryManager(
         runCatching { manager.stopPeerDiscovery(channel, null) }
     }
 
+    /**
+     * Connects to a discovered Wi-Fi Direct peer.
+     * - When `preferPeerAsOwner` is true (peer is already hosting NexoDrop service), yields with intent = 0.
+     * - When `preferPeerAsOwner` is false (both devices opened app idle without creating a group),
+     *   uses high Group Owner intent (14) so this initiator cleanly assumes Host role and peer auto-joins!
+     */
     @SuppressLint("MissingPermission")
     fun connectToWifiDirectPeer(deviceAddress: String, preferPeerAsOwner: Boolean = true) {
         stopDirectPeerDiscovery()
         val manager = p2pManager ?: return
         ensureP2pInitialized()
         val channel = p2pChannel ?: return
-        isExpectingClientP2pAutoConnect = true
-        runCatching { manager.cancelConnect(channel, null) }
-        runCatching { manager.clearServiceRequests(channel, null) }
 
-        val config = WifiP2pConfig().apply {
-            this.deviceAddress = deviceAddress
-            wps.setup = WpsInfo.PBC
-            groupOwnerIntent = if (preferPeerAsOwner) 1 else 6
-        }
-        scope.launch {
-            delay(200)
-            runCatching {
-                manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-                    override fun onSuccess() {
-                        _wifiDirectState.value = _wifiDirectState.value.copy(
-                            statusMessage = "Pairing via Wi-Fi Direct..."
-                        )
-                    }
+        peerConnectJob?.cancel()
+        peerConnectJob = scope.launch {
+            // Check if the other side already initiated L2 group formation moments ago
+            val existingInfo = requestConnectionInfoSuspend(manager, channel)
+            if (existingInfo != null && existingInfo.groupFormed) {
+                val ownerIp = existingInfo.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                isExpectingClientP2pAutoConnect = false
+                if (existingInfo.isGroupOwner) {
+                    fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                } else {
+                    _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
+                }
+                return@launch
+            }
 
-                    override fun onFailure(reason: Int) {
-                        isExpectingClientP2pAutoConnect = false
-                        _wifiDirectState.value = _wifiDirectState.value.copy(
-                            statusMessage = "Direct connect failed ($reason)"
-                        )
-                        _events.tryEmit(DirectDiscoveryEvent.WifiDirectPairFailed("Wi-Fi Direct peer connect failed ($reason)"))
+            isExpectingClientP2pAutoConnect = true
+            awaitP2pAction(1_200L) { manager.stopPeerDiscovery(channel, it) }
+            awaitP2pAction(1_000L) { manager.clearServiceRequests(channel, it) }
+
+            val staleGroup = requestGroupInfoSuspend(manager, channel)
+            if (staleGroup != null) {
+                awaitP2pAction(1_800L) { manager.removeGroup(channel, it) }
+                delay(350)
+            }
+
+            val config = WifiP2pConfig().apply {
+                this.deviceAddress = deviceAddress
+                wps.setup = WpsInfo.PBC
+                groupOwnerIntent = if (preferPeerAsOwner) 0 else 14
+            }
+
+            var connectedOk = false
+            var lastReason = WifiP2pManager.ERROR
+            repeat(3) { attempt ->
+                if (connectedOk) return@repeat
+                if (attempt > 0) {
+                    // Refresh peer cache cleanly if HAL forgot the peer entry
+                    awaitP2pAction(1_000L) { manager.cancelConnect(channel, it) }
+                    awaitP2pAction(1_200L) { manager.discoverPeers(channel, it) }
+                    delay(550)
+                    awaitP2pAction(1_000L) { manager.stopPeerDiscovery(channel, it) }
+                }
+                val res = awaitP2pAction(4_000L) { manager.connect(channel, config, it) }
+                if (res == ACTION_SUCCESS) {
+                    connectedOk = true
+                    _wifiDirectState.value = _wifiDirectState.value.copy(
+                        statusMessage = "Pairing via Wi-Fi Direct..."
+                    )
+                } else {
+                    lastReason = res
+                }
+            }
+
+            if (!connectedOk) {
+                isExpectingClientP2pAutoConnect = false
+                _wifiDirectState.value = _wifiDirectState.value.copy(
+                    statusMessage = "Direct connect failed ($lastReason)"
+                )
+                _events.tryEmit(DirectDiscoveryEvent.WifiDirectPairFailed("Wi-Fi Direct peer connect failed ($lastReason)"))
+                return@launch
+            }
+
+            // Guard against peer never answering the invitation (16s timeout)
+            delay(16_000L)
+            if (isExpectingClientP2pAutoConnect) {
+                val lateInfo = requestConnectionInfoSuspend(manager, channel)
+                if (lateInfo != null && lateInfo.groupFormed) {
+                    val ownerIp = lateInfo.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                    isExpectingClientP2pAutoConnect = false
+                    if (lateInfo.isGroupOwner) {
+                        fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                    } else {
+                        _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
                     }
-                })
+                } else {
+                    isExpectingClientP2pAutoConnect = false
+                    awaitP2pAction(1_000L) { manager.cancelConnect(channel, it) }
+                    _events.tryEmit(DirectDiscoveryEvent.WifiDirectPairFailed("Peer did not respond to Wi-Fi Direct invite. Try QR or Tap Nearby again."))
+                }
             }
         }
     }
 
     /**
      * Joins a Host's Wi-Fi Direct (DIRECT-...) or LocalOnlyHotspot SSID+Passphrase from QR.
-     * For DIRECT- Wi-Fi Direct groups on Android 10+, connects strictly via WifiP2pManager
-     * (never auto-launching WifiNetworkSpecifier's system Settings chooser dialog).
-     * For LocalOnlyHotspot (non-DIRECT- SSID), uses WifiNetworkSpecifier directly.
+     * - For DIRECT- Wi-Fi Direct groups: NEVER triggers WifiNetworkSpecifier (which forces Android 13+'s
+     *   system Wi-Fi / Direct Connection chooser sheet!). Instead uses WifiP2pManager.Config.Builder
+     *   first, and if Android 11 Host's direct group rejects/times out Builder pairing, automatically
+     *   falls back in-app to silent DNS-SD / peer MAC discovery + PBC connect.
+     * - For non-DIRECT SoftAP Hotspots: uses WifiNetworkSpecifier directly.
      */
     @SuppressLint("MissingPermission")
     fun connectDirectByQrCredentials(
         ssid: String,
         passphrase: String,
-        hostMac: String = ""
+        hostMac: String = "",
+        groupId: String = "",
+        frequency: Int = 0
     ) {
         stopDirectPeerDiscovery()
         val manager = p2pManager
@@ -583,45 +780,85 @@ class DiscoveryManager(
                 channel != null &&
                 isWifiP2pEnabled
             ) {
-                isExpectingClientP2pAutoConnect = true
-                runCatching { manager.cancelConnect(channel, null) }
-                runCatching { manager.clearServiceRequests(channel, null) }
+                qrConnectJob?.cancel()
+                qrConnectJob = scope.launch {
+                    isExpectingClientP2pAutoConnect = true
+                    awaitP2pAction(1_200L) { manager.stopPeerDiscovery(channel, it) }
+                    awaitP2pAction(1_000L) { manager.clearServiceRequests(channel, it) }
 
-                val timeoutJob = scope.launch {
-                    delay(14_000L)
-                    if (isExpectingClientP2pAutoConnect) {
-                        isExpectingClientP2pAutoConnect = false
-                        _events.tryEmit(
-                            DirectDiscoveryEvent.WifiDirectPairFailed(
-                                "Could not pair with '$ssid' over Wi-Fi Direct. Try tapping the nearby device directly or switch Host to Direct Hotspot."
-                            )
-                        )
-                    }
-                }
-
-                scope.launch {
-                    delay(220)
-                    // Clear any stale P2P group before joining the Host's group
-                    runCatching {
-                        manager.requestGroupInfo(channel) { stale ->
-                            if (stale != null) {
-                                manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                                    override fun onSuccess() {
-                                        scope.launch {
-                                            delay(300)
-                                            connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
-                                        }
-                                    }
-                                    override fun onFailure(reason: Int) {
-                                        connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
-                                    }
-                                })
-                            } else {
-                                connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
+                    // Check if already connected to the target DIRECT- group
+                    val currentGroup = requestGroupInfoSuspend(manager, channel)
+                    if (currentGroup != null) {
+                        if (currentGroup.networkName.equals(ssid, ignoreCase = true)) {
+                            val info = requestConnectionInfoSuspend(manager, channel)
+                            if (info != null && info.groupFormed && !info.isGroupOwner) {
+                                isExpectingClientP2pAutoConnect = false
+                                val ownerIp = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                                _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
+                                return@launch
                             }
                         }
-                    }.onFailure {
-                        connectUsingDirectBuilder(manager, channel, ssid, passphrase, hostMac, timeoutJob)
+                        awaitP2pAction(2_000L) { manager.removeGroup(channel, it) }
+                        delay(350)
+                    } else {
+                        awaitP2pAction(800L) { manager.cancelConnect(channel, it) }
+                    }
+
+                    // Stage 1: Direct passphrase join via WifiP2pConfig.Builder (stays strictly inside app)
+                    val builderSuccess = tryConnectDirectBuilder(manager, channel, ssid, passphrase)
+                    if (builderSuccess) {
+                        // Wait up to 5.5s for group formation broadcast/poll before switching to silent P2P peer fallback
+                        val deadline = System.currentTimeMillis() + 5_500L
+                        while (System.currentTimeMillis() < deadline && isExpectingClientP2pAutoConnect) {
+                            val info = requestConnectionInfoSuspend(manager, channel)
+                            if (info != null && info.groupFormed) {
+                                isExpectingClientP2pAutoConnect = false
+                                val ownerIp = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                                if (!info.isGroupOwner) {
+                                    _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
+                                } else {
+                                    fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                                }
+                                return@launch
+                            }
+                            delay(400)
+                        }
+                    }
+
+                    if (!isExpectingClientP2pAutoConnect) return@launch
+
+                    // Stage 2: Android 11 -> 13+ silent in-app fallback via MAC or NexoDrop DNS-SD match (NO system settings dialog!)
+                    awaitP2pAction(1_000L) { manager.cancelConnect(channel, it) }
+                    val matchedAddress = findHostAddressSilently(manager, channel, hostMac, groupId)
+                    if (matchedAddress != null && isExpectingClientP2pAutoConnect) {
+                        val fallbackOk = tryConnectByPeerAddress(manager, channel, matchedAddress)
+                        if (fallbackOk) {
+                            val deadline2 = System.currentTimeMillis() + 8_500L
+                            while (System.currentTimeMillis() < deadline2 && isExpectingClientP2pAutoConnect) {
+                                val info = requestConnectionInfoSuspend(manager, channel)
+                                if (info != null && info.groupFormed) {
+                                    isExpectingClientP2pAutoConnect = false
+                                    val ownerIp = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                                    if (!info.isGroupOwner) {
+                                        _events.tryEmit(DirectDiscoveryEvent.WifiDirectGroupFormedAsClient(ownerIp))
+                                    } else {
+                                        fetchGroupCredentialsWithRetry(ownerIp, emitOwnerFormed = true)
+                                    }
+                                    return@launch
+                                }
+                                delay(450)
+                            }
+                        }
+                    }
+
+                    if (isExpectingClientP2pAutoConnect) {
+                        isExpectingClientP2pAutoConnect = false
+                        awaitP2pAction(1_000L) { manager.cancelConnect(channel, it) }
+                        _events.tryEmit(
+                            DirectDiscoveryEvent.WifiDirectPairFailed(
+                                "Could not pair with '$ssid' over Wi-Fi Direct. Tap Host in Nearby Direct Devices or enable Direct Hotspot."
+                            )
+                        )
                     }
                 }
             } else {
@@ -639,89 +876,101 @@ class DiscoveryManager(
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectUsingDirectBuilder(
+    private suspend fun tryConnectDirectBuilder(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
         ssid: String,
-        passphrase: String,
-        hostMac: String,
-        timeoutJob: Job
-    ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        passphrase: String
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val p2pConfig = WifiP2pConfig.Builder()
             .setNetworkName(ssid)
             .setPassphrase(passphrase)
             .enablePersistentMode(false)
             .build()
 
-        runCatching {
-            manager.connect(channel, p2pConfig, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    _wifiDirectState.value = _wifiDirectState.value.copy(
-                        statusMessage = "Joining Wi-Fi Direct ($ssid)..."
-                    )
-                }
-
-                override fun onFailure(reason: Int) {
-                    if (hostMac.isNotBlank()) {
-                        connectToWifiDirectPeerByMacFallback(manager, channel, hostMac, timeoutJob)
-                    } else {
-                        timeoutJob.cancel()
-                        isExpectingClientP2pAutoConnect = false
-                        _events.tryEmit(
-                            DirectDiscoveryEvent.WifiDirectPairFailed(
-                                "Wi-Fi Direct QR join failed ($reason). Try tapping the device in Nearby Devices or use Direct Hotspot."
-                            )
-                        )
-                    }
-                }
-            })
-        }.onFailure { err ->
-            timeoutJob.cancel()
-            isExpectingClientP2pAutoConnect = false
-            _events.tryEmit(
-                DirectDiscoveryEvent.WifiDirectPairFailed(err.localizedMessage ?: "Wi-Fi Direct QR join failed")
-            )
+        repeat(2) { attempt ->
+            val res = awaitP2pAction(3_500L) { manager.connect(channel, p2pConfig, it) }
+            if (res == ACTION_SUCCESS) {
+                _wifiDirectState.value = _wifiDirectState.value.copy(
+                    statusMessage = "Joining Wi-Fi Direct ($ssid)..."
+                )
+                return true
+            }
+            if (res != WifiP2pManager.BUSY || attempt == 1) return false
+            delay(450)
         }
+        return false
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToWifiDirectPeerByMacFallback(
+    private suspend fun findHostAddressSilently(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
         hostMac: String,
-        timeoutJob: Job
-    ) {
+        groupId: String
+    ): String? {
+        val validMac = hostMac.takeIf { it.isNotBlank() && it != "02:00:00:00:00:00" }
+        attachDnsSdListeners(manager, channel)
+        awaitP2pAction(1_000L) { manager.clearServiceRequests(channel, it) }
+        awaitP2pAction(1_000L) {
+            manager.addServiceRequest(channel, WifiP2pDnsSdServiceRequest.newInstance(), it)
+        }
+        manager.discoverServices(channel, null)
+        manager.discoverPeers(channel, null)
+
+        val deadline = System.currentTimeMillis() + 4_500L
+        while (System.currentTimeMillis() < deadline && isExpectingClientP2pAutoConnect) {
+            if (groupId.isNotBlank()) {
+                val byGid = discoveredGroupIdsByAddress.entries.firstOrNull { it.value == groupId }?.key
+                if (byGid != null) {
+                    awaitP2pAction(800L) { manager.stopPeerDiscovery(channel, it) }
+                    return byGid
+                }
+            }
+            if (validMac != null) {
+                val peerHit = _wifiDirectState.value.discoveredPeers.firstOrNull {
+                    it.deviceAddress.equals(validMac, ignoreCase = true)
+                }?.deviceAddress
+                if (peerHit != null) {
+                    awaitP2pAction(800L) { manager.stopPeerDiscovery(channel, it) }
+                    return peerHit
+                }
+            }
+            val nexoHit = _wifiDirectState.value.discoveredPeers.firstOrNull { it.isNexoService }?.deviceAddress
+            if (nexoHit != null && groupId.isBlank()) {
+                awaitP2pAction(800L) { manager.stopPeerDiscovery(channel, it) }
+                return nexoHit
+            }
+            delay(350)
+        }
+        awaitP2pAction(800L) { manager.stopPeerDiscovery(channel, it) }
+        return validMac ?: discoveredP2pServices.keys.firstOrNull()
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun tryConnectByPeerAddress(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
+        peerAddress: String
+    ): Boolean {
         val macCfg = WifiP2pConfig().apply {
-            deviceAddress = hostMac
+            deviceAddress = peerAddress
             wps.setup = WpsInfo.PBC
             groupOwnerIntent = 0
         }
-        runCatching {
-            manager.discoverPeers(channel, null)
-            scope.launch {
-                delay(450)
-                manager.connect(channel, macCfg, object : WifiP2pManager.ActionListener {
-                    override fun onSuccess() {
-                        _wifiDirectState.value = _wifiDirectState.value.copy(
-                            statusMessage = "Pairing via P2P MAC..."
-                        )
-                    }
-
-                    override fun onFailure(reason: Int) {
-                        timeoutJob.cancel()
-                        isExpectingClientP2pAutoConnect = false
-                        _events.tryEmit(
-                            DirectDiscoveryEvent.WifiDirectPairFailed("Wi-Fi Direct peer connect failed ($reason)")
-                        )
-                    }
-                })
-            }
+        val res = awaitP2pAction(3_500L) { manager.connect(channel, macCfg, it) }
+        if (res == ACTION_SUCCESS) {
+            _wifiDirectState.value = _wifiDirectState.value.copy(
+                statusMessage = "Pairing via P2P MAC..."
+            )
+            return true
         }
+        return false
     }
 
     /**
-     * Connects to Host's Direct Hotspot or Wi-Fi Direct SSID+Passphrase in-app using WifiNetworkSpecifier (Android 10+).
+     * Connects to Host's Direct Hotspot SSID+Passphrase in-app using WifiNetworkSpecifier (Android 10+).
      */
     fun connectToDirectWifiNetwork(ssid: String, passphrase: String) {
         val cm = connectivityManager ?: return
@@ -973,25 +1222,33 @@ class DiscoveryManager(
     private fun ensureP2pInitialized() {
         val manager = p2pManager ?: return
         if (p2pChannel == null) {
-            p2pChannel = manager.initialize(context, Looper.getMainLooper(), null)
+            p2pChannel = runCatching { manager.initialize(context, Looper.getMainLooper(), null) }.getOrNull()
         }
         if (!p2pReceiverRegistered) {
             val filter = IntentFilter().apply {
                 addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
                 addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
                 addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
+                addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(p2pReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                context.registerReceiver(p2pReceiver, filter)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(p2pReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    context.registerReceiver(p2pReceiver, filter)
+                }
+                p2pReceiverRegistered = true
             }
-            p2pReceiverRegistered = true
         }
     }
 
     @SuppressLint("MissingPermission")
     fun removeWifiDirectGroup() {
+        qrConnectJob?.cancel()
+        qrConnectJob = null
+        peerConnectJob?.cancel()
+        peerConnectJob = null
+        isExpectingClientP2pAutoConnect = false
         val manager = p2pManager ?: return
         val channel = p2pChannel ?: return
         localP2pServiceInfo?.let { svc ->
@@ -1017,6 +1274,8 @@ class DiscoveryManager(
     }
 
     fun release() {
+        qrConnectJob?.cancel()
+        peerConnectJob?.cancel()
         stopLocalNetworkAdvertising()
         stopLocalNetworkScanning()
         stopDirectPeerDiscovery()

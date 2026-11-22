@@ -274,4 +274,22 @@
     <string name="hub_sent_waiting">भेजा गया — प्रतीक्षारत</string>
     <string name="hub_resend">फिर से भेजें</string>
     <string name="hub_paste_send">पेस्ट करें और भेजें</string>
+    <string name="account_section_title">Google खाता और क्लाउड सिंक (वैकल्पिक)</string>
+    <string name="account_optional_hint">वैकल्पिक — ऑफ़लाइन ट्रांसफ़र, वॉल्ट और बैकअप बिना साइन-इन के 100% काम करते हैं।</string>
+    <string name="account_sign_in_google">Google से साइन इन करें</string>
+    <string name="account_sign_out">साइन आउट</string>
+    <string name="account_sync_now">अभी सिंक करें</string>
+    <string name="account_apply_prefs">क्लाउड प्राथमिकताएं पुनर्स्थापित करें</string>
+    <string name="account_linked_devices">लिंक किए गए डिवाइस (%1$d)</string>
+    <string name="account_this_device_badge">यह डिवाइस</string>
+    <string name="account_synced_transfers_count">क्लाउड-सिंक ट्रांसफ़र: %1$d</string>
+    <string name="account_remove_device">डिवाइस अनलिंक करें</string>
+    <string name="account_signed_in_msg">Google से साइन इन हो गया</string>
+    <string name="account_sign_in_failed">Google साइन-इन विफल</string>
+    <string name="account_signed_out_msg">साइन आउट हो गया</string>
+    <string name="account_sync_done">क्लाउड सिंक पूर्ण</string>
+    <string name="account_sync_failed">क्लाउड सिंक विफल</string>
+    <string name="account_prefs_applied">क्लाउड प्राथमिकताएं लागू हुईं</string>
+    <string name="hub_view_group">ग्रुप देखें</string>
+    <string name="hub_global_join_alert">%1$s आपके ग्रुप में शामिल होना चाहता है</string>
 </resources>

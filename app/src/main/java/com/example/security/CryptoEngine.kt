@@ -78,10 +78,13 @@ object CryptoEngine {
         return mac.doFinal(data)
     }
 
+    private val tlsEncryptCipher = ThreadLocal.withInitial { Cipher.getInstance("AES/GCM/NoPadding") }
+    private val tlsDecryptCipher = ThreadLocal.withInitial { Cipher.getInstance("AES/GCM/NoPadding") }
+
     fun encryptBytes(key: SecretKey, plaintext: ByteArray, aad: ByteArray? = null): ByteArray {
         val iv = ByteArray(GCM_IV_LEN)
         secureRandom.nextBytes(iv)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val cipher = tlsEncryptCipher.get() ?: Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
         if (aad != null) cipher.updateAAD(aad)
         val ciphertext = cipher.doFinal(plaintext)
@@ -93,22 +96,42 @@ object CryptoEngine {
 
     fun decryptBytes(key: SecretKey, ivAndCiphertext: ByteArray, aad: ByteArray? = null): ByteArray {
         require(ivAndCiphertext.size > GCM_IV_LEN) { "Invalid encrypted payload" }
-        val iv = ivAndCiphertext.copyOfRange(0, GCM_IV_LEN)
-        val ciphertext = ivAndCiphertext.copyOfRange(GCM_IV_LEN, ivAndCiphertext.size)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+        val cipher = tlsDecryptCipher.get() ?: Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, ivAndCiphertext, 0, GCM_IV_LEN))
         if (aad != null) cipher.updateAAD(aad)
-        return cipher.doFinal(ciphertext)
+        return cipher.doFinal(ivAndCiphertext, GCM_IV_LEN, ivAndCiphertext.size - GCM_IV_LEN)
     }
 
     fun writeEncryptedFrame(out: DataOutputStream, key: SecretKey, payload: ByteArray) {
-        val encrypted = encryptBytes(key, payload)
-        out.writeInt(encrypted.size)
-        out.write(encrypted)
-        out.flush()
+        writeEncryptedChunk(out, key, payload, 0, payload.size, flush = true)
     }
 
-    fun readEncryptedFrame(input: DataInputStream, key: SecretKey, maxFrameSize: Int = 8 * 1024 * 1024): ByteArray {
+    /**
+     * High-throughput chunk writer avoiding intermediate ByteArray concatenations and per-chunk flushes during bulk transfers.
+     * Preserves the exact [4-byte frame length][12-byte IV][AES-GCM ciphertext+tag] wire format.
+     */
+    fun writeEncryptedChunk(
+        out: DataOutputStream,
+        key: SecretKey,
+        plaintext: ByteArray,
+        offset: Int = 0,
+        length: Int = plaintext.size,
+        flush: Boolean = false
+    ) {
+        val iv = ByteArray(GCM_IV_LEN)
+        secureRandom.nextBytes(iv)
+        val cipher = tlsEncryptCipher.get() ?: Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+        val outSize = cipher.getOutputSize(length)
+        val cipherBuf = ByteArray(outSize)
+        val cipherLen = cipher.doFinal(plaintext, offset, length, cipherBuf, 0)
+        out.writeInt(GCM_IV_LEN + cipherLen)
+        out.write(iv)
+        out.write(cipherBuf, 0, cipherLen)
+        if (flush) out.flush()
+    }
+
+    fun readEncryptedFrame(input: DataInputStream, key: SecretKey, maxFrameSize: Int = 16 * 1024 * 1024): ByteArray {
         val len = input.readInt()
         if (len <= 0 || len > maxFrameSize) {
             throw IllegalStateException("Frame length out of bounds: $len")

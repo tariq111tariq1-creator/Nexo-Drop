@@ -1,19 +1,25 @@
 package com.example
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
+import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AccountAuthState
 import com.example.data.BackupProgress
 import com.example.data.BackupResult
+import com.example.data.CloudSyncUiState
 import com.example.data.DeviceFileItem
 import com.example.data.FileCategory
 import com.example.data.HiddenAppEntity
 import com.example.data.InstalledAppItem
+import com.example.data.RegisteredDevice
 import com.example.data.RestoreResult
 import com.example.data.SaveLocationMode
 import com.example.data.StorageRootInfo
 import com.example.data.StorageSpaceInfo
+import com.example.data.SyncedTransferRecord
 import com.example.data.TransferRecordEntity
 import com.example.data.UserSettings
 import com.example.data.VaultItemEntity
@@ -32,6 +38,7 @@ import com.example.util.Formatters
 import com.example.util.PermissionSnapshot
 import com.example.util.PermissionsHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,6 +46,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,6 +62,7 @@ data class BackupUiState(
     val lastRestoreResult: RestoreResult? = null
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as NexoDropApplication
@@ -60,10 +71,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val storageRepository = app.storageRepository
     private val vaultManager = app.vaultManager
     private val backupManager = app.backupManager
+    private val accountSyncRepository = app.accountSyncRepository
     val p2pManager = app.p2pManager
 
     val settings: StateFlow<UserSettings> = preferences.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserSettings())
+
+    val accountAuthState: StateFlow<AccountAuthState> = accountSyncRepository.authState
+
+    val cloudDevicesState: StateFlow<CloudSyncUiState<List<RegisteredDevice>>> =
+        accountAuthState
+            .map { if (it.signedIn) it.uid else "" }
+            .distinctUntilChanged()
+            .flatMapLatest { uid -> accountSyncRepository.observeDevices(uid) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), CloudSyncUiState.SignedOut)
+
+    val cloudTransfersState: StateFlow<CloudSyncUiState<List<SyncedTransferRecord>>> =
+        accountAuthState
+            .map { if (it.signedIn) it.uid else "" }
+            .distinctUntilChanged()
+            .flatMapLatest { uid -> accountSyncRepository.observeSyncedTransfers(uid) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), CloudSyncUiState.SignedOut)
+
+    private val _cloudSyncBusy = MutableStateFlow(false)
+    val cloudSyncBusy: StateFlow<Boolean> = _cloudSyncBusy.asStateFlow()
 
     val groupState: StateFlow<GroupWorkspaceState> = p2pManager.state
 
@@ -161,6 +192,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             app.getString(R.string.notif_file_received, event.fileName, Formatters.formatBytes(event.sizeBytes)),
                             curSettings.silentNotifications
                         )
+                        if (accountAuthState.value.signedIn) {
+                            launch { syncCloudNow(silent = true) }
+                        }
                     }
                     is P2pEvent.GroupNotification -> {
                         _uiMessages.tryEmit(event.message)
@@ -241,9 +275,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         hostPort: Int,
         groupName: String,
         pin: String,
-        hostMac: String = ""
+        hostMac: String = "",
+        groupId: String = "",
+        frequency: Int = 0
     ) {
-        p2pManager.joinViaDirectQrOrCredentials(ssid, passphrase, hostIp, hostPort, groupName, pin, hostMac)
+        p2pManager.joinViaDirectQrOrCredentials(ssid, passphrase, hostIp, hostPort, groupName, pin, hostMac, groupId, frequency)
     }
 
     fun parseScannedQr(raw: String): ScannedQrResult? {
@@ -260,7 +296,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         groupName = j.optString("name", "Direct Group"),
                         hasPin = j.optBoolean("pin", false),
                         frequency = j.optInt("freq", 0),
-                        hostMac = j.optString("mac", "")
+                        hostMac = j.optString("mac", ""),
+                        groupId = j.optString("gid", "")
                     )
                 } else null
             }.getOrNull()
@@ -980,6 +1017,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setNotifyCompleteOnly(enabled: Boolean) {
         viewModelScope.launch { preferences.setNotifyCompleteOnly(enabled) }
+    }
+
+    // --- Optional Google Sign-In & Cross-Device Cloud Sync ---
+
+    fun signInWithGoogle(activityContext: Context) {
+        viewModelScope.launch {
+            _cloudSyncBusy.value = true
+            val res = accountSyncRepository.signInWithGoogle(activityContext)
+            res.onSuccess {
+                syncCloudNow(silent = true)
+                _uiMessages.tryEmit(app.getString(R.string.account_signed_in_msg))
+            }.onFailure { err ->
+                if (err !is GetCredentialCancellationException) {
+                    _uiMessages.tryEmit(err.localizedMessage ?: app.getString(R.string.account_sign_in_failed))
+                }
+            }
+            _cloudSyncBusy.value = false
+        }
+    }
+
+    fun signOutGoogle() {
+        viewModelScope.launch {
+            accountSyncRepository.signOut()
+            _uiMessages.tryEmit(app.getString(R.string.account_signed_out_msg))
+        }
+    }
+
+    fun syncCloudNow(silent: Boolean = false) {
+        if (!accountAuthState.value.signedIn) return
+        viewModelScope.launch {
+            _cloudSyncBusy.value = true
+            preferences.ensureDeviceId()
+            val cur = settings.value
+            val profileRes = accountSyncRepository.upsertCloudProfileAndDevice(cur)
+            val txRes = accountSyncRepository.syncTransfersToCloud(cur, transferRecords.value)
+            _cloudSyncBusy.value = false
+            if (!silent) {
+                if (profileRes.isSuccess && txRes.isSuccess) {
+                    _uiMessages.tryEmit(app.getString(R.string.account_sync_done))
+                } else {
+                    val errMsg = profileRes.exceptionOrNull()?.localizedMessage
+                        ?: txRes.exceptionOrNull()?.localizedMessage
+                        ?: app.getString(R.string.account_sync_failed)
+                    _uiMessages.tryEmit(errMsg)
+                }
+            }
+        }
+    }
+
+    fun applyCloudPreferences() {
+        if (!accountAuthState.value.signedIn) return
+        viewModelScope.launch {
+            _cloudSyncBusy.value = true
+            val profile = accountSyncRepository.fetchLatestCloudProfile().getOrNull()
+            if (profile != null) {
+                runCatching { SaveLocationMode.valueOf(profile.preferredSaveMode) }.getOrNull()?.let {
+                    preferences.setSaveMode(it)
+                }
+                runCatching { ThemeMode.valueOf(profile.preferredThemeMode) }.getOrNull()?.let {
+                    preferences.setThemeMode(it)
+                }
+                preferences.setStripExifOnSend(profile.stripExifOnSend)
+                _uiMessages.tryEmit(app.getString(R.string.account_prefs_applied))
+            }
+            _cloudSyncBusy.value = false
+        }
+    }
+
+    fun removeCloudDevice(deviceId: String) {
+        viewModelScope.launch {
+            accountSyncRepository.removeCloudDevice(deviceId)
+        }
     }
 
     override fun onCleared() {

@@ -182,5 +182,6 @@ data class ScannedQrResult(
     val groupName: String,
     val hasPin: Boolean,
     val frequency: Int = 0,
-    val hostMac: String = ""
+    val hostMac: String = "",
+    val groupId: String = ""
 )

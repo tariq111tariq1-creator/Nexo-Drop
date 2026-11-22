@@ -298,4 +298,24 @@
     <string name="hub_sent_waiting">Sent — awaiting download</string>
     <string name="hub_resend">Re-send</string>
     <string name="hub_paste_send">Paste &amp; Send</string>
+
+    <!-- Optional Google Account & Cross-Device Sync + Global Join Banner -->
+    <string name="account_section_title">Google Account &amp; Cloud Sync (Optional)</string>
+    <string name="account_optional_hint">Optional — offline transfers, Vault, and backups work 100% without signing in.</string>
+    <string name="account_sign_in_google">Sign in with Google</string>
+    <string name="account_sign_out">Sign Out</string>
+    <string name="account_sync_now">Sync Now</string>
+    <string name="account_apply_prefs">Restore Cloud Preferences</string>
+    <string name="account_linked_devices">Linked Devices (%1$d)</string>
+    <string name="account_this_device_badge">This Device</string>
+    <string name="account_synced_transfers_count">Cloud-synced transfers: %1$d</string>
+    <string name="account_remove_device">Unlink device</string>
+    <string name="account_signed_in_msg">Signed in with Google and synced</string>
+    <string name="account_sign_in_failed">Google sign-in failed</string>
+    <string name="account_signed_out_msg">Signed out of Google account</string>
+    <string name="account_sync_done">Cloud sync completed</string>
+    <string name="account_sync_failed">Cloud sync failed</string>
+    <string name="account_prefs_applied">Cloud preferences applied</string>
+    <string name="hub_view_group">View Group</string>
+    <string name="hub_global_join_alert">%1$s wants to join your group</string>
 </resources>

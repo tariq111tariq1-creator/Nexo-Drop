@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import com.example.data.AccountSyncRepository
 import com.example.data.AppPreferences
 import com.example.data.BackupManager
 import com.example.data.NexoDatabase
@@ -23,6 +24,8 @@ class NexoDropApplication : Application() {
         private set
     lateinit var backupManager: BackupManager
         private set
+    lateinit var accountSyncRepository: AccountSyncRepository
+        private set
     lateinit var p2pManager: P2pGroupManager
         private set
 
@@ -34,6 +37,7 @@ class NexoDropApplication : Application() {
         vaultManager = VaultManager(this)
         storageRepository = StorageRepository(this, vaultManager)
         backupManager = BackupManager(this, repository, storageRepository, vaultManager, preferences)
+        accountSyncRepository = AccountSyncRepository(this)
         p2pManager = P2pGroupManager(this, preferences, repository, storageRepository)
     }
 }
